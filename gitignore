@@ -1,0 +1,10 @@
+# 不要上傳到 GitHub 的東西（機密與營業資料）
+.env
+orders_log.jsonl
+settings.json
+stock.json
+orders.csv
+reports/
+*.zip
+__pycache__/
+*.pyc
