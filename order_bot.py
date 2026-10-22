@@ -57,7 +57,7 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-1004424236242"))  # 接收訂�
 
 # 以下幾項也可以用同名的環境變數設定（雲端平台不用改程式）；SHOP_CONTACT 的換行寫成 \n
 SHOP_NAME = os.getenv("SHOP_NAME", "雞排王")
-SHOP_CONTACT = os.getenv("SHOP_CONTACT", "電話：0900-000-000\n營業時間：18:00 - 03:00").replace("\\n", "\n")
+SHOP_CONTACT = os.getenv("SHOP_CONTACT", "客服：@chicken5757\n營業時間：18:00 - 03:00").replace("\\n", "\n")
 
 # 客服的 Telegram 使用者名稱（不含 @，只能英文數字底線）；留空 "" 就不顯示「聯繫客服」按鈕
 CS_USERNAME = os.getenv("CS_USERNAME", "")
