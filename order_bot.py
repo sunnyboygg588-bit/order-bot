@@ -53,7 +53,7 @@ VERSION = "2026-10-22 v17（關店後菜單一律顯示已休店）"
 
 # ==================== 設定區（請修改）====================
 TOKEN = os.getenv("BOT_TOKEN", "在這裡貼上BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-5481269083"))  # 接收訂單的商家個人或群組 id
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-1004424236242"))  # 接收訂單的商家個人或群組 id
 
 # 以下幾項也可以用同名的環境變數設定（雲端平台不用改程式）；SHOP_CONTACT 的換行寫成 \n
 SHOP_NAME = os.getenv("SHOP_NAME", "雞排王")
