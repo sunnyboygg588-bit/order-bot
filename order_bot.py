@@ -49,18 +49,18 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 雲端平台請把環境變數 DATA_DIR 設成「永久儲存空間」的掛載路徑（例如 /data），重新部署資料才不會消失。
 DATA_DIR = os.getenv("DATA_DIR") or BASE_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
-VERSION = "2026-10-22 v16（雲端平台版：資料資料夾 / 備份 / 匯入）"
+VERSION = "2026-10-22 v17（關店後菜單一律顯示已休店）"
 
 # ==================== 設定區（請修改）====================
 TOKEN = os.getenv("BOT_TOKEN", "在這裡貼上BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-1004424236242"))  # 接收訂單的商家個人或群組 id
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-5481269083"))  # 接收訂單的商家個人或群組 id
 
 # 以下幾項也可以用同名的環境變數設定（雲端平台不用改程式）；SHOP_CONTACT 的換行寫成 \n
 SHOP_NAME = os.getenv("SHOP_NAME", "雞排王")
-SHOP_CONTACT = os.getenv("SHOP_CONTACT", "電話：0900-000-000\n營業時間：11:00 - 21:00").replace("\\n", "\n")
+SHOP_CONTACT = os.getenv("SHOP_CONTACT", "電話：0900-000-000\n營業時間：18:00 - 03:00").replace("\\n", "\n")
 
 # 客服的 Telegram 使用者名稱（不含 @，只能英文數字底線）；留空 "" 就不顯示「聯繫客服」按鈕
-CS_USERNAME = os.getenv("CS_USERNAME", "chicken5757")
+CS_USERNAME = os.getenv("CS_USERNAME", "")
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
@@ -694,15 +694,19 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     text = f"歡迎光臨「{SHOP_NAME}」👋\n請使用下方按鈕開始點餐。"
     if not SETTINGS["open"]:
-        text += "\n\n😴 目前休息中，暫停接單，營業時間再來喔！"
+        text += "\n\n🔴 已休店，目前暫停接單，營業時間再來喔！"
     await update.message.reply_text(text, reply_markup=MAIN_KB)
 
 
 async def show_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return
     await update.message.reply_text("請選擇分類：", reply_markup=category_markup())
 
 
 async def show_cart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return
     text, markup = render_cart(ctx)
     await update.message.reply_text(text, reply_markup=markup)
 
@@ -724,6 +728,15 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     data = q.data
     cart = get_cart(ctx)
+
+    if not SETTINGS["open"] and data != "noop":
+        # 已休店：不管按哪個按鈕，都跳出「已休店」，並把這則菜單訊息換成休店說明（按鈕消失）
+        await q.answer("🔴 已休店，目前暫停接單", show_alert=True)
+        try:
+            await q.edit_message_text(closed_text())
+        except BadRequest:
+            pass
+        return
 
     if data == "noop":
         await q.answer()
@@ -854,6 +867,8 @@ async def checkout_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def got_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
     choice = update.message.text
     if (choice == BTN_PICKUP and not SETTINGS["pickup"]) or (
         choice == BTN_DELIVERY and not SETTINGS["delivery"]
@@ -869,12 +884,16 @@ async def got_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def got_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
     ctx.user_data["name"] = update.message.text.strip()
     await update.message.reply_text("請輸入聯絡電話：")
     return PHONE
 
 
 async def got_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
     ctx.user_data["phone"] = update.message.text.strip()
     if ctx.user_data["order_type"] == BTN_DELIVERY:
         await update.message.reply_text("請輸入外送地址：")
@@ -884,6 +903,8 @@ async def got_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def got_addr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
     ctx.user_data["addr"] = update.message.text.strip()
     return await ask_confirm(update, ctx)
 
@@ -908,7 +929,15 @@ def stock_warning(problems: list) -> str:
 
 
 def closed_text() -> str:
-    return "😴 目前休息中，暫停接單。\n歡迎營業時間再來點餐！\n\n" + SHOP_CONTACT
+    return "🔴 已休店\n目前暫停接單，歡迎營業時間再來點餐！\n\n" + SHOP_CONTACT
+
+
+async def closed_guard(update: Update) -> bool:
+    """已休店時回覆「已休店」並回傳 True，讓呼叫的地方直接結束"""
+    if SETTINGS["open"]:
+        return False
+    await update.effective_message.reply_text(closed_text(), reply_markup=MAIN_KB)
+    return True
 
 
 async def send_to_admin(bot, text, markup) -> bool:
@@ -1027,6 +1056,8 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def back_to_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """結帳途中按「返回菜單」：離開結帳流程，回到菜單，購物車內容保留"""
+    if await closed_guard(update):
+        return ConversationHandler.END
     await update.message.reply_text("已返回菜單，購物車內容保留 👇", reply_markup=MAIN_KB)
     await update.message.reply_text("請選擇分類：", reply_markup=category_markup())
     return ConversationHandler.END
@@ -1795,6 +1826,7 @@ async def close_shop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text(
         f"🔴 已關店，客人不能再下單。\n場次：{SETTINGS['session']}\n"
         f"本場訂單 {len(a['valid'])} 張，營業額 {fmt_revenue(a)}\n\n"
+        "客人點菜單、購物車、結帳，都會顯示「已休店」。\n"
         "輸入「結算」可以取得完整報表。"
     )
     try:  # 順便把資料備份傳到群組
