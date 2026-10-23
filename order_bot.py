@@ -10,6 +10,7 @@ Telegram 點餐機器人（完整版）
 """
 import asyncio
 import csv
+import html
 import io
 import json
 import logging
@@ -28,6 +29,7 @@ from telegram import (
     InputMediaPhoto,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    ReplyParameters,
     Update,
 )
 from telegram.error import BadRequest, Conflict, NetworkError, RetryAfter
@@ -49,18 +51,25 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 雲端平台請把環境變數 DATA_DIR 設成「永久儲存空間」的掛載路徑（例如 /data），重新部署資料才不會消失。
 DATA_DIR = os.getenv("DATA_DIR") or BASE_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
-VERSION = "2026-10-22 v17（關店後菜單一律顯示已休店）"
+VERSION = "2026-10-23 v19（付款方式 TNG / USDT）"
 
 # ==================== 設定區（請修改）====================
 TOKEN = os.getenv("BOT_TOKEN", "在這裡貼上BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-1004424236242"))  # 接收訂單的商家個人或群組 id
 
-# 以下幾項也可以用同名的環境變數設定（雲端平台不用改程式）；SHOP_CONTACT 的換行寫成 \n
+# 以下幾項也可以用同名的環境變數設定（雲端平台不用改程式）
 SHOP_NAME = os.getenv("SHOP_NAME", "雞排王")
-SHOP_CONTACT = os.getenv("SHOP_CONTACT", "客服：@chicken5757\n營業時間：18:00 - 03:00").replace("\\n", "\n")
+SHOP_HOURS = os.getenv("SHOP_HOURS", "18:00 - 03:00")  # 營業時間（顯示給客人看）
 
-# 客服的 Telegram 使用者名稱（不含 @，只能英文數字底線）；留空 "" 就不顯示「聯繫客服」按鈕
-CS_USERNAME = os.getenv("CS_USERNAME", "")
+# 客服的 Telegram 使用者名稱（ID），只能英文數字底線，寫不寫 @ 都可以。
+# 客人看到的聯絡方式會是「聯繫客服：@ID」，並附上一鍵聯繫的按鈕；留空 "" 就只顯示營業時間。
+CS_USERNAME = os.getenv("CS_USERNAME", "").strip().lstrip("@")
+
+# 客人看到的聯絡資訊。想完全自訂，可以設環境變數 SHOP_CONTACT（換行寫成 \n）
+SHOP_CONTACT = os.getenv(
+    "SHOP_CONTACT",
+    (f"聯繫客服：@{chicken5757}\n" if CS_USERNAME else "") + f"營業時間：{SHOP_HOURS}",
+).replace("\\n", "\n")
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
@@ -106,6 +115,15 @@ ADS = [
 
 CURRENCY = "U"
 AUTO_BACKUP_TIME = time(4, 0)  # 每天這個時間，把資料備份檔傳到商家群組；None = 不自動備份（關店時一定會傳）
+# ---------- 付款方式（客人結帳時二選一）----------
+PAY_TNG_ENABLED = True    # 開放 TNG 電子錢包
+PAY_USDT_ENABLED = True   # 開放 USDT（U 與 USDT 以 1:1 計）
+# 兩種都 False = 結帳不問付款方式。收款資料建議用環境變數設定，不要寫死在程式裡。
+TNG_NUMBER = os.getenv("TNG_NUMBER", "")      # TNG 收款手機號碼
+TNG_NAME = os.getenv("TNG_NAME", "")          # 收款人姓名（讓客人轉帳時核對）
+TNG_QR = os.getenv("TNG_QR", "tng_qr.jpg")    # 收款 QR 圖片檔名（放在程式資料夾；沒有這個檔案就只顯示號碼）
+USDT_ADDRESS = os.getenv("USDT_ADDRESS", "")  # USDT 收款地址
+USDT_NETWORK = os.getenv("USDT_NETWORK", "TRC20")  # 收款網路，例如 TRC20、BEP20
 RM_ROUND_5_SEN = True  # 「合計」的馬幣金額四捨五入到 5 仙（馬來西亞現金找零習慣）；單品只四捨五入到 1 仙
 
 # 菜單：分類 -> {代號: (名稱, 價格)}
@@ -326,12 +344,18 @@ BTN_MENU = "🍽 菜單"
 BTN_CART = "🛒 購物車"
 BTN_CHECKOUT = "✅ 結帳"
 BTN_ORDERS = "📋 我的訂單"
-BTN_CONTACT = "☎️ 聯絡店家"
+BTN_CONTACT = "💬 聯繫客服"
+LEGACY_BTN_CONTACT = "☎️ 聯絡店家"  # 舊版按鈕文字：客人手機上還沒更新的按鈕仍然有效
 BTN_CANCEL = "❌ 取消"
 BTN_BACK_MENU = "🍽 返回菜單"
 BTN_PICKUP = "🏃 外帶"
 BTN_DELIVERY = "🛵 外送"
 BTN_CONFIRM = "✅ 確認送出"
+BTN_PAY_TNG = "💙 TNG 電子錢包"
+BTN_PAY_USDT = "💲 USDT"
+PAY_LABEL = {"tng": BTN_PAY_TNG, "usdt": BTN_PAY_USDT}
+PAY_SHORT = {"tng": "TNG", "usdt": "USDT"}
+PAY_METHODS = [k for k, on in (("tng", PAY_TNG_ENABLED), ("usdt", PAY_USDT_ENABLED)) if on]
 
 MAIN_KB = ReplyKeyboardMarkup(
     [[BTN_MENU, BTN_CART], [BTN_CHECKOUT, BTN_ORDERS], [BTN_CONTACT]],
@@ -340,7 +364,7 @@ MAIN_KB = ReplyKeyboardMarkup(
 )
 
 # 結帳流程狀態
-TYPE, NAME, PHONE, ADDR, CONFIRM = range(5)
+TYPE, NAME, PHONE, ADDR, PAY, CONFIRM = range(6)
 
 
 # ==================== 工具函式 ====================
@@ -527,6 +551,10 @@ def load_all_orders() -> list:
                 o = latest.get((rec.get("uid"), rec.get("no")))
                 if o:
                     o["status"] = rec["status"]
+            elif rec.get("event") == "pay":
+                o = latest.get((rec.get("uid"), rec.get("no")))
+                if o:
+                    o["paid"] = True
     return orders
 
 
@@ -676,6 +704,7 @@ MERCHANT_HELP = (
     "🏪 營業\n開店 ／ 關店\n匯率 4.45（設定 1U 等於幾馬幣）\n結算（查舊場次：結算 2026-10-10）\n訂單（只傳訂單清單）\n營業日（查看目前場次）\n\n"
     "📦 庫存\n庫存\n設定庫存（換行寫「雞排 50」）\n售完 雞排 ／ 補貨 雞排 ／ 清除庫存\n\n"
     "🛵 服務\n關閉外帶 ／ 開啟外帶\n關閉外送 ／ 開啟外送\n\n"
+    "💳 付款\n客人結帳可選 TNG／USDT；客人傳付款截圖後，按訊息下方「✅ 確認收款」\n\n"
     "💾 資料\n備份（傳資料備份檔，關店也會自動傳）\n匯入：傳備份檔並在說明寫「匯入」\n\n"
     "🏷 杯貼\n接單時自動傳杯貼\n補印 12（重傳 #0012）\n貼紙測試（傳範例貼紙）\n\n"
     "🔧 其他\n/ping 速度與執行電腦\n/chatid 查看群組 id\n隱藏選單：收起點餐按鈕"
@@ -714,7 +743,12 @@ async def show_cart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_contact(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"☎️ {SHOP_NAME}\n{SHOP_CONTACT}")
+    markup = None
+    if CS_USERNAME:
+        markup = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("💬 聯繫客服", url=f"https://t.me/{CS_USERNAME}")]]
+        )
+    await update.message.reply_text(f"💬 {SHOP_NAME}\n{SHOP_CONTACT}", reply_markup=markup)
 
 
 async def show_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -847,6 +881,7 @@ async def checkout_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if problems:
         await msg.reply_text(stock_warning(problems), reply_markup=MAIN_KB)
         return ConversationHandler.END
+    ctx.user_data.pop("pay", None)
     options = []
     if SETTINGS["pickup"]:
         options.append(BTN_PICKUP)
@@ -854,7 +889,7 @@ async def checkout_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         options.append(BTN_DELIVERY)
     if not options:
         await msg.reply_text(
-            "😢 目前暫時停止接單，請稍後再來，或聯絡店家：\n" + SHOP_CONTACT,
+            "😢 目前暫時停止接單，請稍後再來，或聯繫客服：\n" + SHOP_CONTACT,
             reply_markup=MAIN_KB,
         )
         return ConversationHandler.END
@@ -901,22 +936,64 @@ async def got_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("請輸入外送地址：")
         return ADDR
     ctx.user_data["addr"] = "—（外帶）"
-    return await ask_confirm(update, ctx)
+    return await after_contact(update, ctx)
 
 
 async def got_addr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await closed_guard(update):
         return ConversationHandler.END
     ctx.user_data["addr"] = update.message.text.strip()
+    return await after_contact(update, ctx)
+
+
+def pay_amount_text(method: str, total_u: float) -> str:
+    """這個付款方式要付多少：USDT 付 U 的金額；TNG 付馬幣（需要先設定匯率）"""
+    if method == "usdt":
+        return f"{total_u:.2f} USDT"
+    rm = rm_amount(total_u, SETTINGS.get("rm_rate"), total=True)
+    return f"RM{rm:.2f}" if rm is not None else f"{total_u:.2f}{CURRENCY}（馬幣金額請向客服確認）"
+
+
+async def after_contact(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """姓名、電話（外送再加地址）填完之後：有開放付款方式就問付款，否則直接確認"""
+    if PAY_METHODS:
+        return await ask_pay(update, ctx)
+    return await ask_confirm(update, ctx)
+
+
+async def ask_pay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    total = cart_total(get_cart(ctx))
+    kb = ReplyKeyboardMarkup(
+        [[PAY_LABEL[k] for k in PAY_METHODS], [BTN_BACK_MENU, BTN_CANCEL]], resize_keyboard=True
+    )
+    await update.message.reply_text(
+        f"請選擇付款方式：\n\n💰 訂單金額：{money(total, total=True)}", reply_markup=kb
+    )
+    return PAY
+
+
+async def got_pay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
+    text = update.message.text
+    key = next((k for k in PAY_METHODS if PAY_LABEL[k] == text), None)
+    if key is None:
+        await update.message.reply_text("這個付款方式目前沒有開放，請從下方按鈕選擇。")
+        return PAY
+    ctx.user_data["pay"] = key
     return await ask_confirm(update, ctx)
 
 
 async def ask_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d = ctx.user_data
+    pay = d.get("pay") if PAY_METHODS else None
+    pay_line = (
+        f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, cart_total(get_cart(ctx)))}）" if pay else ""
+    )
     text = (
         "📝 請確認訂單\n\n"
         f"{cart_text(get_cart(ctx))}\n\n"
-        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}"
+        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{pay_line}"
     )
     kb = ReplyKeyboardMarkup([[BTN_CONFIRM], [BTN_BACK_MENU, BTN_CANCEL]], resize_keyboard=True)
     await update.message.reply_text(text, reply_markup=kb)
@@ -967,6 +1044,9 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     t = "d" if d["order_type"] == BTN_DELIVERY else "p"
     cart = get_cart(ctx)
+    pay = d.get("pay") if PAY_METHODS else None
+    total_u = cart_total(cart)
+    rm_total = rm_amount(total_u, SETTINGS.get("rm_rate"), total=True)
 
     # 取號並寫入紀錄（加鎖：避免兩位客人同時下單拿到同一個編號，也避免同時搶最後一份庫存）
     problems = []
@@ -989,29 +1069,31 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "addr": d["addr"],
                 "total": cart_total(cart),
                 "rate": SETTINGS.get("rm_rate"),
-                "rm_total": rm_amount(cart_total(cart), SETTINGS.get("rm_rate"), total=True),
+                "rm_total": rm_total,
+                "pay": pay,
                 "lines": order_lines(cart),
             })
     if problems:  # 最後一刻被別人買走了
         await update.message.reply_text(stock_warning(problems), reply_markup=MAIN_KB)
         return ConversationHandler.END
 
+    pay_line = f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, total_u)}）" if pay else ""
     summary = (
         f"🧾 訂單 #{no}\n{cart_text(cart)}\n\n"
-        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}"
+        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{pay_line}"
     )
 
     # 通知商家（附狀態按鈕）；失敗時告知客人，並把這筆訂單標記為作廢
     if ADMIN_CHAT_ID:
         ok = await send_to_admin(
             ctx.bot,
-            f"🔔 新訂單\n\n{summary}\n\n👤 Telegram：{user.full_name} (id {user.id})",
+            f"🔔 新訂單\n\n{summary}{'（待確認收款）' if pay else ''}\n\n👤 Telegram：{user.full_name} (id {user.id})",
             status_markup("new", user.id, no, t),
         )
         if not ok:
             log_event({"event": "status", "uid": user.id, "no": no, "status": "reject"})
             await update.message.reply_text(
-                "⚠️ 目前無法送出訂單，請直接聯絡店家。\n" + SHOP_CONTACT,
+                "⚠️ 目前無法送出訂單，請直接聯繫客服。\n" + SHOP_CONTACT,
                 reply_markup=MAIN_KB,
             )
             return ConversationHandler.END
@@ -1035,12 +1117,19 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     logging.exception("傳送售完通知失敗")
 
     d.setdefault("orders", []).append(summary)
+    d["last_order"] = {"no": no, "pay": pay}  # 客人之後傳付款截圖時，用來對應是哪一張單
     cart.clear()
     await update.message.reply_text(
         f"✅ 訂單 #{no} 已送出，商家確認後會通知你，謝謝！\n\n"
         "📞 下單完成後主動聯繫客服核對訂單資訊",
         reply_markup=MAIN_KB,
     )
+    if pay:
+        try:
+            await send_payment_info(update, no, pay, total_u, rm_total)
+        except Exception:
+            logging.exception("傳送付款資訊失敗")
+            await update.message.reply_text("⚠️ 付款資訊傳送失敗，請聯繫客服取得收款方式。")
     if CS_USERNAME:
         await update.message.reply_text(
             "👇 點此聯繫客服",
@@ -1049,6 +1138,97 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ),
         )
     return ConversationHandler.END
+
+
+def payment_html(no: str, method: str, total_u: float, rm_total) -> str:
+    """下單後顯示給客人的付款說明（HTML；收款號碼與地址用 <code>，客人點一下就能複製）"""
+    e = html.escape
+    if method == "tng":
+        lines = ["💙 <b>TNG 電子錢包付款</b>"]
+        if rm_total is not None:
+            lines.append(f"訂單 #{no}　應付：<b>RM{rm_total:.2f}</b>")
+        else:
+            lines.append(f"訂單 #{no}　金額：<b>{total_u:.2f}{CURRENCY}</b>（馬幣金額請聯繫客服確認）")
+        if TNG_NUMBER:
+            who = f"（{e(TNG_NAME)}）" if TNG_NAME else ""
+            lines.append(f"收款號碼：<code>{e(TNG_NUMBER)}</code>{who}")
+        else:
+            lines.append("收款資訊請聯繫客服取得。")
+        lines.append(f"轉帳備註請寫：<code>#{no}</code>")
+        proof = "<b>付款截圖</b>"
+    else:
+        lines = ["💲 <b>USDT 付款</b>", f"訂單 #{no}　應付：<b>{total_u:.2f} USDT</b>"]
+        if USDT_ADDRESS:
+            lines += [
+                f"網路：<b>{e(USDT_NETWORK)}</b>（請務必選對網路，選錯資金會遺失）",
+                "收款地址（點一下可複製）：",
+                f"<code>{e(USDT_ADDRESS)}</code>",
+            ]
+        else:
+            lines.append("收款地址請聯繫客服取得。")
+        proof = "<b>付款截圖</b>或<b>交易哈希（TXID）</b>"
+    lines += ["", f"付款後，請把{proof}直接傳到這個對話，店家確認收款後會通知你。"]
+    return "\n".join(lines)
+
+
+async def send_payment_info(update: Update, no: str, method: str, total_u: float, rm_total):
+    text = payment_html(no, method, total_u, rm_total)
+    qr = os.path.join(BASE_DIR, TNG_QR) if (method == "tng" and TNG_QR) else ""
+    if qr and os.path.exists(qr):
+        with open(qr, "rb") as f:
+            await update.message.reply_photo(photo=f, caption=text, parse_mode="HTML")
+    else:
+        await update.message.reply_text(text, parse_mode="HTML")
+
+
+TXID_PATTERN = r"^\s*(?:0x)?[0-9a-fA-F]{64}\s*$"
+
+
+async def on_payment_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """客人私訊傳來付款截圖（或 TXID）：轉給商家群組，並附上「確認收款」按鈕"""
+    msg, user = update.effective_message, update.effective_user
+    last = ctx.user_data.get("last_order")
+    if not last or not ADMIN_CHAT_ID:
+        await msg.reply_text("找不到你最近的訂單。如果已經付款，請聯繫客服：\n" + SHOP_CONTACT)
+        return
+    no = last["no"]
+    method = PAY_SHORT.get(last.get("pay"), "")
+    head = await send_retry(
+        ctx.bot.send_message, ADMIN_CHAT_ID,
+        f"💳 訂單 #{no} 付款證明{f'（{method}）' if method else ''}\n👤 {user.full_name} (id {user.id})",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("✅ 確認收款", callback_data=f"pay:{user.id}:{no}")]]
+        ),
+    )
+    await send_retry(
+        ctx.bot.copy_message, ADMIN_CHAT_ID, msg.chat_id, msg.message_id,
+        reply_parameters=ReplyParameters(message_id=head.message_id),
+    )
+    await msg.reply_text("✅ 已收到，已轉給店家確認，確認後會通知你。")
+
+
+async def on_pay_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """商家按「✅ 確認收款」：記錄收款、通知客人"""
+    q = update.callback_query
+    if q.message.chat_id != ADMIN_CHAT_ID:
+        await q.answer("沒有權限", show_alert=True)
+        return
+    _, uid, no = q.data.split(":")
+    uid = int(uid)
+    log_event({
+        "event": "pay", "uid": uid, "no": no, "by": q.from_user.first_name,
+        "time": datetime.now(TIMEZONE).strftime("%H:%M:%S"),
+    })
+    await q.answer("已記錄收款")
+    stamp = datetime.now(TIMEZONE).strftime("%H:%M")
+    try:
+        await q.edit_message_text(f"{q.message.text}\n\n✅ 已收款（{q.from_user.first_name} {stamp}）")
+    except BadRequest:
+        pass
+    try:
+        await ctx.bot.send_message(uid, f"💰 訂單 #{no} 已確認收到付款，謝謝！")
+    except Exception:
+        await q.message.reply_text(f"⚠️ 無法通知訂單 #{no} 的客人（可能已封鎖機器人）。")
 
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1320,7 +1500,7 @@ def customer_message(action, no, t):
     if action == "accept":
         return f"✅ 訂單 #{no} 商家已接單，正在為你準備。"
     if action == "reject":
-        return f"😢 抱歉，訂單 #{no} 目前無法接單，如有疑問請聯絡店家：\n{SHOP_CONTACT}"
+        return f"😢 抱歉，訂單 #{no} 目前無法接單，如有疑問請聯繫客服：\n{SHOP_CONTACT}"
     if action == "ready":
         if t == "d":
             return f"🛵 訂單 #{no} 已出單，外送人員已出發，請留意電話。"
@@ -1404,8 +1584,21 @@ def aggregate(day: str) -> dict:
     done = sum(1 for o in valid if o["status"] == "done")
     rms = [order_rm(o) for o in valid]
     revenue_rm = None if (not valid or any(x is None for x in rms)) else round(sum(rms), 2)
+    pay = {}
+    for o in valid:
+        k = o.get("pay")
+        if not k:
+            continue
+        p = pay.setdefault(k, {"orders": 0, "paid": 0, "amount": 0.0, "amount_rm": 0.0})
+        p["orders"] += 1
+        p["paid"] += 1 if o.get("paid") else 0
+        p["amount"] += o["total"]
+        rm = order_rm(o)
+        if rm is not None:
+            p["amount_rm"] += rm
     return {
         "day": day,
+        "pay": pay,
         "revenue_rm": revenue_rm,
         "orders": orders,
         "valid": valid,
@@ -1452,8 +1645,16 @@ def summary_text(a: dict) -> str:
     lines += [
         f"💰 營業額：{fmt_revenue(a)}",
         f"🏃 外帶 {a['pickup']}　🛵 外送 {a['delivery']}",
-        "",
     ]
+    for k in ("tng", "usdt"):
+        p = a["pay"].get(k)
+        if p:
+            rm = f"（RM{p['amount_rm']:.2f}）" if k == "tng" and p["amount_rm"] else ""
+            lines.append(
+                f"{'💙' if k == 'tng' else '💲'} {PAY_SHORT[k]}：{p['orders']} 單，{p['amount']:.2f}{CURRENCY}{rm}"
+                f"，已收款 {p['paid']}/{p['orders']}"
+            )
+    lines.append("")
     total_qty = sum(i["qty"] for i in a["items"].values())
     lines.append(f"🍽 品項銷售（共 {total_qty} 份）")
 
@@ -1472,6 +1673,25 @@ def summary_text(a: dict) -> str:
         lines.append("\n其他")
         lines += [row(iid) for iid in others]
     return "\n".join(lines)
+
+
+def pay_rows(a: dict) -> list:
+    rows = []
+    for k in ("tng", "usdt"):
+        p = a["pay"].get(k)
+        if p:
+            rows.append((f"{PAY_SHORT[k]}（單數 / 已收款）", f"{p['orders']} / {p['paid']}"))
+            rows.append((f"{PAY_SHORT[k]} 金額（{CURRENCY}）", round(p["amount"], 2)))
+            if k == "tng" and p["amount_rm"]:
+                rows.append(("TNG 金額（RM）", round(p["amount_rm"], 2)))
+    return rows
+
+
+def pay_cells(o: dict) -> list:
+    """訂單明細用：付款方式、是否已收款"""
+    method = PAY_SHORT.get(o.get("pay"), "")
+    paid = "已收款" if o.get("paid") else ("未收款" if method else "")
+    return [method, paid]
 
 
 def write_excel(a: dict) -> str:
@@ -1508,6 +1728,7 @@ def write_excel(a: dict) -> str:
         ("已完成 / 處理中", f"{a['done']} / {a['pending']}"),
         ("已拒單（不計入）", a["rejected"]),
         ("外帶 / 外送", f"{a['pickup']} / {a['delivery']}"),
+        *pay_rows(a),
     ]:
         ws.append([k, v])
         ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
@@ -1557,13 +1778,14 @@ def write_excel(a: dict) -> str:
 
     # --- 訂單明細 ---
     ws = wb.create_sheet("訂單明細")
-    ws.append(["單號", "時間", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "狀態"])
+    ws.append(["單號", "時間", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "付款方式", "收款", "狀態"])
     for o in a["orders"]:
         ws.append([
             f"#{o['no']}", o.get("time", ""), o["name"], o["phone"],
             "外送" if o["type"] == "d" else "外帶", o["addr"],
             "；".join(f"{line_label(l)} x{l['qty']}" for l in o["lines"]),
             o["total"], order_rm(o) if order_rm(o) is not None else "",
+            *pay_cells(o),
             STATUS_TEXT.get(o["status"], o["status"]),
         ])
     style_header(ws)
@@ -1587,19 +1809,20 @@ def write_excel(a: dict) -> str:
 def write_orders_csv(a: dict) -> str:
     """某場次的訂單清單（一張單一列），Excel 可直接開啟，中文不亂碼"""
     os.makedirs(REPORT_DIR, exist_ok=True)
-    rows = [["場次", "時間", "單號", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "狀態"]]
+    rows = [["場次", "時間", "單號", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "付款方式", "收款", "狀態"]]
     for o in a["orders"]:
         rows.append([
             a["day"], o.get("time", ""), f"#{o['no']}", o["name"], o["phone"],
             "外送" if o["type"] == "d" else "外帶", o["addr"],
             "；".join(f"{line_label(l)} x{l['qty']}" for l in o["lines"]),
             o["total"], order_rm(o) if order_rm(o) is not None else "",
+            *pay_cells(o),
             STATUS_TEXT.get(o["status"], o["status"]),
         ])
     rows.append([])
     rows.append([
         "合計（不含拒單）", "", "", "", "", "", "", "", a["revenue"],
-        a["revenue_rm"] if a.get("revenue_rm") is not None else "", f"{len(a['valid'])} 單",
+        a["revenue_rm"] if a.get("revenue_rm") is not None else "", "", "", f"{len(a['valid'])} 單",
     ])
 
     def save(path):
@@ -2286,6 +2509,10 @@ def main():
     global ADMIN_FILTER
     print("機器人啟動｜版本：", VERSION)
     print(run_info())
+    if "tng" in PAY_METHODS and not TNG_NUMBER:
+        print("⚠️ 尚未設定 TNG_NUMBER：客人選 TNG 時，會被請去聯繫客服取得收款資訊")
+    if "usdt" in PAY_METHODS and not USDT_ADDRESS:
+        print("⚠️ 尚未設定 USDT_ADDRESS：客人選 USDT 時，會被請去聯繫客服取得收款地址")
     app = (
         Application.builder()
         .token(TOKEN)
@@ -2317,6 +2544,9 @@ def main():
             NAME: [MessageHandler(text_filter, got_name)],
             PHONE: [MessageHandler(text_filter, got_phone)],
             ADDR: [MessageHandler(text_filter, got_addr)],
+            PAY: [MessageHandler(
+                filters.Regex("^(" + "|".join(re.escape(l) for l in PAY_LABEL.values()) + ")$"), got_pay
+            )],
             CONFIRM: [MessageHandler(filters.Regex(f"^{BTN_CONFIRM}$"), timed(confirm_order))],
         },
         fallbacks=[
@@ -2386,10 +2616,17 @@ def main():
         not_admin,
     ))
     app.add_handler(checkout)
+    # 客人私訊傳付款截圖（或 TXID）→ 轉給商家群組
+    app.add_handler(MessageHandler(
+        (filters.PHOTO | filters.Regex(TXID_PATTERN)) & filters.ChatType.PRIVATE, on_payment_proof
+    ))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_MENU}$"), show_menu))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_CART}$"), show_cart))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_ORDERS}$"), show_orders))
-    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_CONTACT}$"), show_contact))
+    app.add_handler(MessageHandler(
+        filters.Regex(f"^({re.escape(BTN_CONTACT)}|{re.escape(LEGACY_BTN_CONTACT)})$"), show_contact
+    ))
+    app.add_handler(CallbackQueryHandler(timed(on_pay_confirm), pattern="^pay:"))
     app.add_handler(CallbackQueryHandler(timed(on_status), pattern="^st:"))  # 必須放在 on_callback 前面
     app.add_handler(CallbackQueryHandler(timed(on_callback)))
     app.add_error_handler(on_error)
