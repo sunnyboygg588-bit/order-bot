@@ -73,7 +73,7 @@ SHOP_CONTACT = os.getenv(
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
-BOT_USERNAME = os.getenv("BOT_USERNAME", "你的機器人使用者名稱")  # 不含 @
+BOT_USERNAME = os.getenv("BOT_USERNAME", "jipaiwang_bot")  # 不含 @
 TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 # 「營業日」從幾點開始算新的一天（要落在收攤之後、開店之前）。
 # 營業時間 18:00~03:00 → 設 17：晚上 18:00 到隔天 03:00 的訂單都算同一天，
