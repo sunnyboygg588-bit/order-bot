@@ -27,6 +27,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
+    KeyboardButton,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     ReplyParameters,
@@ -51,7 +52,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 雲端平台請把環境變數 DATA_DIR 設成「永久儲存空間」的掛載路徑（例如 /data），重新部署資料才不會消失。
 DATA_DIR = os.getenv("DATA_DIR") or BASE_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
-VERSION = "2026-10-23 v19（付款方式 TNG / USDT）"
+VERSION = "2026-10-24 v20（外送定位）"
 
 # ==================== 設定區（請修改）====================
 TOKEN = os.getenv("BOT_TOKEN", "在這裡貼上BOT_TOKEN")
@@ -73,7 +74,7 @@ SHOP_CONTACT = os.getenv(
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
-BOT_USERNAME = os.getenv("BOT_USERNAME", "jipaiwang_bot")  # 不含 @
+BOT_USERNAME = os.getenv("BOT_USERNAME", "你的機器人使用者名稱")  # 不含 @
 TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 # 「營業日」從幾點開始算新的一天（要落在收攤之後、開店之前）。
 # 營業時間 18:00~03:00 → 設 17：晚上 18:00 到隔天 03:00 的訂單都算同一天，
@@ -115,6 +116,10 @@ ADS = [
 
 CURRENCY = "U"
 AUTO_BACKUP_TIME = time(4, 0)  # 每天這個時間，把資料備份檔傳到商家群組；None = 不自動備份（關店時一定會傳）
+# ---------- 外送定位 ----------
+ASK_DELIVERY_LOCATION = True        # 外送訂單：結帳時請客人傳送定位（手機）或貼地圖連結（電腦）
+DELIVERY_LOCATION_REQUIRED = False  # True = 外送一定要有定位；False = 客人可以略過，只用文字地址
+
 # ---------- 付款方式（客人結帳時二選一）----------
 PAY_TNG_ENABLED = True    # 開放 TNG 電子錢包
 PAY_USDT_ENABLED = True   # 開放 USDT（U 與 USDT 以 1:1 計）
@@ -339,6 +344,30 @@ def display_name(key: str) -> str:
     return name
 
 
+# 地圖連結（客人貼 Google 地圖、Waze、Apple 地圖的分享連結也算定位）
+MAP_LINK_PATTERN = (
+    r"https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|(?:www\.)?google\.[a-z.]+/maps|maps\.google\.[a-z.]+"
+    r"|(?:www\.)?waze\.com/ul|ul\.waze\.com|maps\.apple\.com|share\.here\.com)[^\s]*"
+)
+MAP_LINK_RE = re.compile(MAP_LINK_PATTERN, re.I)
+
+
+def extract_map_link(text):
+    m = MAP_LINK_RE.search(text or "")
+    return m.group(0) if m else None
+
+
+def map_url(lat: float, lng: float) -> str:
+    return f"https://www.google.com/maps?q={lat:.6f},{lng:.6f}"
+
+
+def order_map(o: dict) -> str:
+    """這張訂單的地圖連結（座標或客人貼的連結），沒有就是空字串"""
+    if o.get("lat") is not None and o.get("lng") is not None:
+        return map_url(o["lat"], o["lng"])
+    return o.get("map_link") or ""
+
+
 # 底部常駐按鈕
 BTN_MENU = "🍽 菜單"
 BTN_CART = "🛒 購物車"
@@ -351,6 +380,8 @@ BTN_BACK_MENU = "🍽 返回菜單"
 BTN_PICKUP = "🏃 外帶"
 BTN_DELIVERY = "🛵 外送"
 BTN_CONFIRM = "✅ 確認送出"
+BTN_SEND_LOC = "📍 傳送我的定位"
+BTN_SKIP_LOC = "⏭ 略過，只用文字地址"
 BTN_PAY_TNG = "💙 TNG 電子錢包"
 BTN_PAY_USDT = "💲 USDT"
 PAY_LABEL = {"tng": BTN_PAY_TNG, "usdt": BTN_PAY_USDT}
@@ -364,7 +395,7 @@ MAIN_KB = ReplyKeyboardMarkup(
 )
 
 # 結帳流程狀態
-TYPE, NAME, PHONE, ADDR, PAY, CONFIRM = range(6)
+TYPE, NAME, PHONE, ADDR, LOC, PAY, CONFIRM = range(7)
 
 
 # ==================== 工具函式 ====================
@@ -555,6 +586,10 @@ def load_all_orders() -> list:
                 o = latest.get((rec.get("uid"), rec.get("no")))
                 if o:
                     o["paid"] = True
+            elif rec.get("event") == "loc":  # 下單之後才補傳的定位
+                o = latest.get((rec.get("uid"), rec.get("no")))
+                if o:
+                    o["lat"], o["lng"], o["map_link"] = rec.get("lat"), rec.get("lng"), rec.get("map_link")
     return orders
 
 
@@ -882,6 +917,7 @@ async def checkout_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(stock_warning(problems), reply_markup=MAIN_KB)
         return ConversationHandler.END
     ctx.user_data.pop("pay", None)
+    ctx.user_data.pop("loc", None)
     options = []
     if SETTINGS["pickup"]:
         options.append(BTN_PICKUP)
@@ -943,7 +979,59 @@ async def got_addr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await closed_guard(update):
         return ConversationHandler.END
     ctx.user_data["addr"] = update.message.text.strip()
+    return await ask_location(update, ctx)
+
+
+async def ask_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """外送：請客人傳定位。電腦版沒有定位按鈕，所以也接受貼地圖連結"""
+    if not ASK_DELIVERY_LOCATION:
+        return await after_contact(update, ctx)
+    rows = [[KeyboardButton(BTN_SEND_LOC, request_location=True)]]
+    if not DELIVERY_LOCATION_REQUIRED:
+        rows.append([BTN_SKIP_LOC])
+    rows.append([BTN_BACK_MENU, BTN_CANCEL])
+    tip = "" if DELIVERY_LOCATION_REQUIRED else "\n• 不想提供：按「略過」，只用文字地址"
+    await update.message.reply_text(
+        "📍 請傳送你的定位，外送員才能順利找到你。\n\n"
+        "• 手機：按下方「📍 傳送我的定位」\n"
+        "• 電腦或按不到：貼上地圖的分享連結（Google 地圖按「分享」複製）" + tip,
+        reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True),
+    )
+    return LOC
+
+
+async def got_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
+    loc = update.message.location
+    ctx.user_data["loc"] = {"lat": loc.latitude, "lng": loc.longitude}
+    await update.message.reply_text("✅ 已收到定位")
     return await after_contact(update, ctx)
+
+
+async def got_map_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
+    ctx.user_data["loc"] = {"link": extract_map_link(update.message.text)}
+    await update.message.reply_text("✅ 已收到地圖連結")
+    return await after_contact(update, ctx)
+
+
+async def skip_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await closed_guard(update):
+        return ConversationHandler.END
+    if DELIVERY_LOCATION_REQUIRED:
+        await update.message.reply_text("外送需要提供定位，請按「📍 傳送我的定位」，或貼上地圖連結。")
+        return LOC
+    ctx.user_data.pop("loc", None)
+    return await after_contact(update, ctx)
+
+
+async def loc_hint(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "請按下方「📍 傳送我的定位」，或貼上地圖的分享連結（例如 Google 地圖）。"
+    )
+    return LOC
 
 
 def pay_amount_text(method: str, total_u: float) -> str:
@@ -990,10 +1078,13 @@ async def ask_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pay_line = (
         f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, cart_total(get_cart(ctx)))}）" if pay else ""
     )
+    loc_line = ""
+    if d.get("order_type") == BTN_DELIVERY and ASK_DELIVERY_LOCATION:
+        loc_line = "\n定位：已提供 📍" if d.get("loc") else "\n定位：未提供（只用文字地址）"
     text = (
         "📝 請確認訂單\n\n"
         f"{cart_text(get_cart(ctx))}\n\n"
-        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{pay_line}"
+        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{loc_line}{pay_line}"
     )
     kb = ReplyKeyboardMarkup([[BTN_CONFIRM], [BTN_BACK_MENU, BTN_CANCEL]], resize_keyboard=True)
     await update.message.reply_text(text, reply_markup=kb)
@@ -1019,12 +1110,11 @@ async def closed_guard(update: Update) -> bool:
     return True
 
 
-async def send_to_admin(bot, text, markup) -> bool:
+async def send_to_admin(bot, text, markup):
     """把訂單傳給商家。遇到 Telegram 限流（太多訊息）會等待後重試，最多 5 次"""
     for _ in range(5):
         try:
-            await bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup)
-            return True
+            return await bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup)
         except RetryAfter as e:
             wait = e.retry_after
             wait = wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
@@ -1032,8 +1122,8 @@ async def send_to_admin(bot, text, markup) -> bool:
             await asyncio.sleep(wait + 1)
         except Exception:
             logging.exception("無法把訂單傳給商家，請檢查 ADMIN_CHAT_ID")
-            return False
-    return False
+            return None
+    return None
 
 
 async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1045,6 +1135,10 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     t = "d" if d["order_type"] == BTN_DELIVERY else "p"
     cart = get_cart(ctx)
     pay = d.get("pay") if PAY_METHODS else None
+    loc = d.get("loc") if t == "d" else None
+    lat = loc.get("lat") if loc else None
+    lng = loc.get("lng") if loc else None
+    map_link = loc.get("link") if loc else None
     total_u = cart_total(cart)
     rm_total = rm_amount(total_u, SETTINGS.get("rm_rate"), total=True)
 
@@ -1071,6 +1165,9 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "rate": SETTINGS.get("rm_rate"),
                 "rm_total": rm_total,
                 "pay": pay,
+                "lat": lat,
+                "lng": lng,
+                "map_link": map_link,
                 "lines": order_lines(cart),
             })
     if problems:  # 最後一刻被別人買走了
@@ -1078,16 +1175,21 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     pay_line = f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, total_u)}）" if pay else ""
+    has_loc = lat is not None or bool(map_link)
+    loc_line = ("\n定位：已提供 📍" if has_loc else "\n定位：未提供") if (t == "d" and ASK_DELIVERY_LOCATION) else ""
     summary = (
         f"🧾 訂單 #{no}\n{cart_text(cart)}\n\n"
-        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{pay_line}"
+        f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{loc_line}{pay_line}"
+    )
+    map_line = (
+        f"\n📍 地圖：{map_url(lat, lng)}" if lat is not None else (f"\n📍 地圖：{map_link}" if map_link else "")
     )
 
     # 通知商家（附狀態按鈕）；失敗時告知客人，並把這筆訂單標記為作廢
     if ADMIN_CHAT_ID:
         ok = await send_to_admin(
             ctx.bot,
-            f"🔔 新訂單\n\n{summary}{'（待確認收款）' if pay else ''}\n\n👤 Telegram：{user.full_name} (id {user.id})",
+            f"🔔 新訂單\n\n{summary}{'（待確認收款）' if pay else ''}{map_line}\n\n👤 Telegram：{user.full_name} (id {user.id})",
             status_markup("new", user.id, no, t),
         )
         if not ok:
@@ -1097,6 +1199,14 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=MAIN_KB,
             )
             return ConversationHandler.END
+        if lat is not None:  # 在訂單訊息下面附上可以直接點開導航的定位
+            try:
+                await send_retry(
+                    ctx.bot.send_location, ADMIN_CHAT_ID, lat, lng,
+                    reply_parameters=ReplyParameters(message_id=ok.message_id),
+                )
+            except Exception:
+                logging.exception("傳送定位給商家失敗")
 
     # 記錄到 CSV
     try:
@@ -1117,7 +1227,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     logging.exception("傳送售完通知失敗")
 
     d.setdefault("orders", []).append(summary)
-    d["last_order"] = {"no": no, "pay": pay}  # 客人之後傳付款截圖時，用來對應是哪一張單
+    d["last_order"] = {"no": no, "pay": pay, "type": t}  # 客人之後傳付款截圖或定位時，用來對應是哪一張單
     cart.clear()
     await update.message.reply_text(
         f"✅ 訂單 #{no} 已送出，商家確認後會通知你，謝謝！\n\n"
@@ -1205,6 +1315,35 @@ async def on_payment_proof(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_parameters=ReplyParameters(message_id=head.message_id),
     )
     await msg.reply_text("✅ 已收到，已轉給店家確認，確認後會通知你。")
+
+
+async def on_delivery_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """客人下單之後，私訊傳來定位（或地圖連結）：轉給商家群組，並記在這張外送單上"""
+    msg, user = update.effective_message, update.effective_user
+    last = ctx.user_data.get("last_order")
+    if not last or last.get("type") != "d":
+        await msg.reply_text("目前沒有需要定位的外送訂單。有疑問請聯繫客服：\n" + SHOP_CONTACT)
+        return
+    no = last["no"]
+    if msg.location:
+        lat, lng, link = msg.location.latitude, msg.location.longitude, None
+        url = map_url(lat, lng)
+    else:
+        lat = lng = None
+        link = extract_map_link(msg.text)
+        url = link
+    log_event({"event": "loc", "uid": user.id, "no": no, "lat": lat, "lng": lng, "map_link": link})
+    if ADMIN_CHAT_ID:
+        head = await send_retry(
+            ctx.bot.send_message, ADMIN_CHAT_ID,
+            f"📍 訂單 #{no} 外送定位\n👤 {user.full_name} (id {user.id})\n地圖：{url}",
+        )
+        if lat is not None:
+            await send_retry(
+                ctx.bot.send_location, ADMIN_CHAT_ID, lat, lng,
+                reply_parameters=ReplyParameters(message_id=head.message_id),
+            )
+    await msg.reply_text("✅ 已把定位傳給店家，外送員會依這個位置送達。")
 
 
 async def on_pay_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1778,7 +1917,7 @@ def write_excel(a: dict) -> str:
 
     # --- 訂單明細 ---
     ws = wb.create_sheet("訂單明細")
-    ws.append(["單號", "時間", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "付款方式", "收款", "狀態"])
+    ws.append(["單號", "時間", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "付款方式", "收款", "狀態", "定位"])
     for o in a["orders"]:
         ws.append([
             f"#{o['no']}", o.get("time", ""), o["name"], o["phone"],
@@ -1787,6 +1926,7 @@ def write_excel(a: dict) -> str:
             o["total"], order_rm(o) if order_rm(o) is not None else "",
             *pay_cells(o),
             STATUS_TEXT.get(o["status"], o["status"]),
+            order_map(o),
         ])
     style_header(ws)
     for r in ws.iter_rows(min_row=2, min_col=8, max_col=9):
@@ -1809,7 +1949,7 @@ def write_excel(a: dict) -> str:
 def write_orders_csv(a: dict) -> str:
     """某場次的訂單清單（一張單一列），Excel 可直接開啟，中文不亂碼"""
     os.makedirs(REPORT_DIR, exist_ok=True)
-    rows = [["場次", "時間", "單號", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "付款方式", "收款", "狀態"]]
+    rows = [["場次", "時間", "單號", "姓名", "電話", "方式", "地址", "內容", f"金額（{CURRENCY}）", "金額（RM）", "付款方式", "收款", "狀態", "定位"]]
     for o in a["orders"]:
         rows.append([
             a["day"], o.get("time", ""), f"#{o['no']}", o["name"], o["phone"],
@@ -1818,6 +1958,7 @@ def write_orders_csv(a: dict) -> str:
             o["total"], order_rm(o) if order_rm(o) is not None else "",
             *pay_cells(o),
             STATUS_TEXT.get(o["status"], o["status"]),
+            order_map(o),
         ])
     rows.append([])
     rows.append([
@@ -2544,6 +2685,12 @@ def main():
             NAME: [MessageHandler(text_filter, got_name)],
             PHONE: [MessageHandler(text_filter, got_phone)],
             ADDR: [MessageHandler(text_filter, got_addr)],
+            LOC: [
+                MessageHandler(filters.LOCATION, got_location),
+                MessageHandler(filters.Regex(f"^{re.escape(BTN_SKIP_LOC)}$"), skip_location),
+                MessageHandler(filters.Regex(MAP_LINK_RE), got_map_link),
+                MessageHandler(text_filter, loc_hint),
+            ],
             PAY: [MessageHandler(
                 filters.Regex("^(" + "|".join(re.escape(l) for l in PAY_LABEL.values()) + ")$"), got_pay
             )],
@@ -2619,6 +2766,10 @@ def main():
     # 客人私訊傳付款截圖（或 TXID）→ 轉給商家群組
     app.add_handler(MessageHandler(
         (filters.PHOTO | filters.Regex(TXID_PATTERN)) & filters.ChatType.PRIVATE, on_payment_proof
+    ))
+    # 客人下單後才補傳定位（或地圖連結）→ 轉給商家群組
+    app.add_handler(MessageHandler(
+        (filters.LOCATION | filters.Regex(MAP_LINK_RE)) & filters.ChatType.PRIVATE, on_delivery_location
     ))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_MENU}$"), show_menu))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_CART}$"), show_cart))
