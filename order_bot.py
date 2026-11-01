@@ -64,7 +64,7 @@ SHOP_HOURS = os.getenv("SHOP_HOURS", "18:00 - 03:00")  # 營業時間（顯示�
 
 # 客服的 Telegram 使用者名稱（ID），只能英文數字底線，寫不寫 @ 都可以。
 # 客人看到的聯絡方式會是「聯繫客服：@ID」，並附上一鍵聯繫的按鈕；留空 "" 就只顯示營業時間。
-CS_USERNAME = os.getenv("chicken5757", "").strip().lstrip("@")
+CS_USERNAME = os.getenv("CS_USERNAME", "").strip().lstrip("@")
 
 # 客人看到的聯絡資訊。想完全自訂，可以設環境變數 SHOP_CONTACT（換行寫成 \n）
 SHOP_CONTACT = os.getenv(
@@ -117,6 +117,8 @@ ADS = [
 CURRENCY = "U"
 AUTO_BACKUP_TIME = time(4, 0)  # 每天這個時間，把資料備份檔傳到商家群組；None = 不自動備份（關店時一定會傳）
 # ---------- 外送定位 ----------
+DELIVERY_FEE_U = 15.0     # 外送費（U）：客人選外送時自動加進訂單金額
+DELIVERY_FEE_RM = 60.0    # 外送費（RM）
 ASK_DELIVERY_LOCATION = True        # 外送訂單：結帳時請客人傳送定位（手機）或貼地圖連結（電腦）
 DELIVERY_LOCATION_REQUIRED = False  # True = 外送一定要有定位；False = 客人可以略過，只用文字地址
 
@@ -427,12 +429,27 @@ def cart_total_rm(cart: dict) -> float:
     return round(sum(item_price_rm(k) * q for k, q in cart.items()), 2)
 
 
-def cart_text(cart: dict) -> str:
+def order_totals(cart: dict, delivery: bool = False):
+    """訂單應付金額 (U, RM)；外送會加上外送費"""
+    u, rm = cart_total(cart), cart_total_rm(cart)
+    if delivery:
+        u, rm = round(u + DELIVERY_FEE_U, 2), round(rm + DELIVERY_FEE_RM, 2)
+    return u, rm
+
+
+def is_delivery(d: dict) -> bool:
+    return d.get("order_type") == BTN_DELIVERY
+
+
+def cart_text(cart: dict, delivery: bool = False) -> str:
     lines = [
         f"• {display_name(k)} x{q}  {money(item_price(k) * q, item_price_rm(k) * q)}"
         for k, q in cart.items()
     ]
-    return "\n".join(lines) + f"\n\n💰 合計：{money(cart_total(cart), cart_total_rm(cart))}"
+    if delivery:
+        lines.append(f"🛵 外送費  {money(DELIVERY_FEE_U, DELIVERY_FEE_RM)}")
+    u, rm = order_totals(cart, delivery)
+    return "\n".join(lines) + f"\n\n💰 合計：{money(u, rm)}"
 
 
 def render_cart(ctx):
@@ -453,7 +470,8 @@ def render_cart(ctx):
         InlineKeyboardButton("✅ 去結帳", callback_data="checkout"),
     ])
     rows.append([InlineKeyboardButton("🍽 返回菜單", callback_data="menu")])
-    return "🛒 你的購物車\n\n" + cart_text(cart), InlineKeyboardMarkup(rows)
+    note = f"\n\n🛵 選擇外送會另加外送費 {money(DELIVERY_FEE_U, DELIVERY_FEE_RM)}"
+    return "🛒 你的購物車\n\n" + cart_text(cart) + note, InlineKeyboardMarkup(rows)
 
 
 def category_markup():
@@ -721,6 +739,9 @@ def order_lines(cart: dict) -> list:
 def save_order(no, d, cart):
     """把訂單寫入 orders.csv（Excel 可直接開啟）"""
     items = "; ".join(f"{display_name(k)}x{q}" for k, q in cart.items())
+    delivery = is_delivery(d)
+    if delivery:
+        items += f"; 外送費 {DELIVERY_FEE_RM:g}RM/{DELIVERY_FEE_U:g}{CURRENCY}"
     path = os.path.join(DATA_DIR, "orders.csv")
     new_file = not os.path.exists(path) or os.path.getsize(path) == 0
     with open(path, "a", newline="", encoding="utf-8-sig") as f:
@@ -730,7 +751,7 @@ def save_order(no, d, cart):
         w.writerow([
             datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M"),
             f"#{no}", d["name"], d["phone"], d["order_type"], d["addr"],
-            items, cart_total(cart),
+            items, order_totals(cart, delivery)[0],
         ])
 
 
@@ -950,8 +971,12 @@ async def got_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("這個取餐方式目前暫停服務，請選擇其他方式。")
         return TYPE
     ctx.user_data["order_type"] = choice
+    fee_note = (
+        f"🛵 外送費 {money(DELIVERY_FEE_U, DELIVERY_FEE_RM)} 會加進訂單金額\n\n"
+        if choice == BTN_DELIVERY else ""
+    )
     await update.message.reply_text(
-        "請輸入你的姓名：",
+        fee_note + "請輸入你的姓名：",
         reply_markup=ReplyKeyboardMarkup([[BTN_BACK_MENU, BTN_CANCEL]], resize_keyboard=True),
     )
     return NAME
@@ -1050,12 +1075,13 @@ async def after_contact(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def ask_pay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    cart = get_cart(ctx)
+    total_u, total_rm = order_totals(get_cart(ctx), is_delivery(ctx.user_data))
     kb = ReplyKeyboardMarkup(
         [[PAY_LABEL[k] for k in PAY_METHODS], [BTN_BACK_MENU, BTN_CANCEL]], resize_keyboard=True
     )
+    fee = "（含外送費）" if is_delivery(ctx.user_data) else ""
     await update.message.reply_text(
-        f"請選擇付款方式：\n\n💰 訂單金額：{money(cart_total(cart), cart_total_rm(cart))}", reply_markup=kb
+        f"請選擇付款方式：\n\n💰 訂單金額{fee}：{money(total_u, total_rm)}", reply_markup=kb
     )
     return PAY
 
@@ -1076,14 +1102,15 @@ async def ask_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d = ctx.user_data
     pay = d.get("pay") if PAY_METHODS else None
     pay_line = (
-        f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, cart_total(get_cart(ctx)), cart_total_rm(get_cart(ctx)))}）" if pay else ""
+        f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, *order_totals(get_cart(ctx), is_delivery(d)))}）"
+        if pay else ""
     )
     loc_line = ""
     if d.get("order_type") == BTN_DELIVERY and ASK_DELIVERY_LOCATION:
         loc_line = "\n定位：已提供 📍" if d.get("loc") else "\n定位：未提供（只用文字地址）"
     text = (
         "📝 請確認訂單\n\n"
-        f"{cart_text(get_cart(ctx))}\n\n"
+        f"{cart_text(get_cart(ctx), is_delivery(d))}\n\n"
         f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{loc_line}{pay_line}"
     )
     kb = ReplyKeyboardMarkup([[BTN_CONFIRM], [BTN_BACK_MENU, BTN_CANCEL]], resize_keyboard=True)
@@ -1139,8 +1166,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lat = loc.get("lat") if loc else None
     lng = loc.get("lng") if loc else None
     map_link = loc.get("link") if loc else None
-    total_u = cart_total(cart)
-    rm_total = cart_total_rm(cart)
+    total_u, rm_total = order_totals(cart, t == "d")  # 外送會含外送費
 
     # 取號並寫入紀錄（加鎖：避免兩位客人同時下單拿到同一個編號，也避免同時搶最後一份庫存）
     problems = []
@@ -1163,6 +1189,8 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "addr": d["addr"],
                 "total": total_u,
                 "rm_total": rm_total,
+                "fee": DELIVERY_FEE_U if t == "d" else 0,
+                "fee_rm": DELIVERY_FEE_RM if t == "d" else 0,
                 "pay": pay,
                 "lat": lat,
                 "lng": lng,
@@ -1177,7 +1205,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     has_loc = lat is not None or bool(map_link)
     loc_line = ("\n定位：已提供 📍" if has_loc else "\n定位：未提供") if (t == "d" and ASK_DELIVERY_LOCATION) else ""
     summary = (
-        f"🧾 訂單 #{no}\n{cart_text(cart)}\n\n"
+        f"🧾 訂單 #{no}\n{cart_text(cart, t == 'd')}\n\n"
         f"方式：{d['order_type']}\n姓名：{d['name']}\n電話：{d['phone']}\n地址：{d['addr']}{loc_line}{pay_line}"
     )
     map_line = (
