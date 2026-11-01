@@ -64,7 +64,7 @@ SHOP_HOURS = os.getenv("SHOP_HOURS", "18:00 - 03:00")  # 營業時間（顯示�
 
 # 客服的 Telegram 使用者名稱（ID），只能英文數字底線，寫不寫 @ 都可以。
 # 客人看到的聯絡方式會是「聯繫客服：@ID」，並附上一鍵聯繫的按鈕；留空 "" 就只顯示營業時間。
-CS_USERNAME = os.getenv("CS_USERNAME", "").strip().lstrip("@")
+CS_USERNAME = os.getenv("chicken5757", "").strip().lstrip("@")
 
 # 客人看到的聯絡資訊。想完全自訂，可以設環境變數 SHOP_CONTACT（換行寫成 \n）
 SHOP_CONTACT = os.getenv(
