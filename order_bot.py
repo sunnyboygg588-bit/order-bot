@@ -52,7 +52,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 雲端平台請把環境變數 DATA_DIR 設成「永久儲存空間」的掛載路徑（例如 /data），重新部署資料才不會消失。
 DATA_DIR = os.getenv("DATA_DIR") or BASE_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
-VERSION = "2026-10-24 v20（外送定位）"
+VERSION = "2026-11-01 v21（固定 RM / U 雙價格，取消匯率）"
 
 # ==================== 設定區（請修改）====================
 TOKEN = os.getenv("BOT_TOKEN", "在這裡貼上BOT_TOKEN")
@@ -69,7 +69,7 @@ CS_USERNAME = os.getenv("CS_USERNAME", "").strip().lstrip("@")
 # 客人看到的聯絡資訊。想完全自訂，可以設環境變數 SHOP_CONTACT（換行寫成 \n）
 SHOP_CONTACT = os.getenv(
     "SHOP_CONTACT",
-    (f"聯繫客服：@{chicken5757}\n" if CS_USERNAME else "") + f"營業時間：{SHOP_HOURS}",
+    (f"聯繫客服：@{CS_USERNAME}\n" if CS_USERNAME else "") + f"營業時間：{SHOP_HOURS}",
 ).replace("\\n", "\n")
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
@@ -129,40 +129,40 @@ TNG_NAME = os.getenv("TNG_NAME", "")          # 收款人姓名（讓客人轉�
 TNG_QR = os.getenv("TNG_QR", "tng_qr.jpg")    # 收款 QR 圖片檔名（放在程式資料夾；沒有這個檔案就只顯示號碼）
 USDT_ADDRESS = os.getenv("USDT_ADDRESS", "")  # USDT 收款地址
 USDT_NETWORK = os.getenv("USDT_NETWORK", "TRC20")  # 收款網路，例如 TRC20、BEP20
-RM_ROUND_5_SEN = True  # 「合計」的馬幣金額四捨五入到 5 仙（馬來西亞現金找零習慣）；單品只四捨五入到 1 仙
 
-# 菜單：分類 -> {代號: (名稱, 價格)}
+# 菜單：分類 -> {代號: (名稱, RM 價格, U 價格)}   客人看到的就是這裡寫的價格，不做任何換算
 MENU = {
     "🍗 肉類": {
-        "m1": ("雞翅", 1.45),
-        "m2": ("雞腿", 2.45),
-        "m3": ("腿排", 2.45),
-        "m4": ("古早味雞排", 4.45),
-        "m5": ("塔香鹽酥雞", 3.20),
+        "m1": ("雞翅", 5.80, 1.45),
+        "m2": ("雞腿", 10.00, 2.45),
+        "m3": ("腿排", 10.00, 2.45),
+        "m4": ("古早味雞排", 18.00, 4.45),
+        "m5": ("塔香鹽酥雞", 13.00, 3.20),
     },
     "🍡 點心": {
-        "s1": ("甜不辣", 2.00),
-        "s2": ("薯條", 2.00),
-        "s3": ("杏鮑菇", 2.20),
-        "s4": ("炸年糕", 1.60),
-        "s5": ("洋蔥圈", 1.35),
+        "s1": ("甜不辣", 8.20, 2.00),
+        "s2": ("薯條", 8.20, 2.00),
+        "s3": ("杏鮑菇", 9.00, 2.20),
+        "s4": ("炸年糕", 6.50, 1.60),
+        "s5": ("洋蔥圈", 5.50, 1.35),
     },
     "🥤 飲料": {
-        "d1": ("阿薩姆紅茶", 1.95),
-        "d2": ("甘露綠茶", 1.95),
-        "d3": ("高山烏龍茶", 1.95),
-        "d4": ("阿薩姆奶茶", 2.45),
-        "d5": ("甘露奶綠", 2.45),
-        "d6": ("高山烏龍奶", 2.45),
-        "d7": ("珍珠奶茶", 2.70),
-        "d8": ("巷口冬瓜露", 1.95),
+        "d1": ("阿薩姆紅茶", 7.80, 1.95),
+        "d2": ("甘露綠茶", 7.80, 1.95),
+        "d3": ("高山烏龍茶", 7.80, 1.95),
+        "d4": ("阿薩姆奶茶", 9.80, 2.45),
+        "d5": ("甘露奶綠", 9.80, 2.45),
+        "d6": ("高山烏龍奶", 9.80, 2.45),
+        "d7": ("珍珠奶茶", 10.80, 2.70),
+        "d8": ("巷口冬瓜露", 7.80, 1.95),
     },
 }
 
 # 飲料分類：點選後依序詢問 加珍珠 → 甜度 → 冰塊
 DRINK_CATEGORY = "🥤 飲料"
 TOPPING_NAME = "加珍珠"
-TOPPING_PRICE = 0.70
+TOPPING_PRICE = 0.70      # 加珍珠：U 價格
+TOPPING_PRICE_RM = 2.80   # 加珍珠：RM 價格
 NO_TOPPING = {"d7"}  # 不詢問配料的品項（珍珠奶茶本來就有珍珠）
 SUGAR = ["1分", "3分", "5分", "7分", "10分"]
 ICE = ["去冰", "微冰", "少冰", "正常冰"]
@@ -210,7 +210,6 @@ DEFAULT_SETTINGS = {
     "session": None,     # 目前（或最近一次）營業場次的名稱，開店時建立
     "opened_at": None,   # 開店時間
     "closed_at": None,   # 關店時間
-    "rm_rate": None,     # 匯率：1U 等於幾馬幣（RM）。None = 不顯示馬幣
     "admin_migrated_from": None,  # 商家群組升級成超級群組時，記錄舊 id
     "admin_migrated_to": None,    # ……與新 id
 }
@@ -277,18 +276,22 @@ def save_stock():
 ITEMS = {}
 ITEM_CAT = {}
 for _cat, _group in MENU.items():
-    for _iid, (_name, _price) in _group.items():
-        ITEMS[_iid] = (_name, _price)
+    for _iid, (_name, _rm, _u) in _group.items():
+        ITEMS[_iid] = (_name, _u, _rm)  # 注意順序：[1] = U、[2] = RM
         ITEM_CAT[_iid] = _cat
         if _cat == DRINK_CATEGORY and _iid not in NO_TOPPING:
-            ITEMS[_iid + "p"] = (f"{_name}({TOPPING_NAME})", round(_price + TOPPING_PRICE, 2))
+            ITEMS[_iid + "p"] = (
+                f"{_name}({TOPPING_NAME})",
+                round(_u + TOPPING_PRICE, 2),
+                round(_rm + TOPPING_PRICE_RM, 2),
+            )
             ITEM_CAT[_iid + "p"] = _cat
 
 
 FIXED_SUGAR = {  # 品項代號 → 顯示文字
     _iid: FIXED_SUGAR_ITEMS[_name]
     for _group in MENU.values()
-    for _iid, (_name, _price) in _group.items()
+    for _iid, (_name, _rm, _u) in _group.items()
     if _name in FIXED_SUGAR_ITEMS
 }
 
@@ -314,7 +317,13 @@ def parse_key(key: str):
 
 
 def item_price(key: str) -> float:
+    """這個品項的 U 價格"""
     return ITEMS[parse_key(key)[0]][1]
+
+
+def item_price_rm(key: str) -> float:
+    """這個品項的 RM 價格"""
+    return ITEMS[parse_key(key)[0]][2]
 
 
 def is_fixed_sugar(iid: str) -> bool:
@@ -399,25 +408,9 @@ TYPE, NAME, PHONE, ADDR, LOC, PAY, CONFIRM = range(7)
 
 
 # ==================== 工具函式 ====================
-def rm_amount(u: float, rate, total: bool = False):
-    """把 U 換成馬幣。rate = 1U 等於幾 RM；沒設定匯率回傳 None"""
-    if not rate:
-        return None
-    sen = int(math.floor(u * rate * 100 + 0.5))  # 先四捨五入到 1 仙
-    if total and RM_ROUND_5_SEN:  # 再依馬來西亞規則進位到 5 仙
-        r = sen % 5
-        if r in (1, 2):
-            sen -= r
-        elif r in (3, 4):
-            sen += 5 - r
-    return sen / 100
-
-
-def money(x: float, total: bool = False) -> str:
-    """金額文字：有設定匯率時，例如 4.45U（RM19.80）"""
-    base = f"{x:.2f}{CURRENCY}"
-    rm = rm_amount(x, SETTINGS.get("rm_rate"), total)
-    return base if rm is None else f"{base}（RM{rm:.2f}）"
+def money(u: float, rm: float) -> str:
+    """金額文字（固定價格，不換算），例如：RM18.00 / 4.45U"""
+    return f"RM{rm:.2f} / {u:.2f}{CURRENCY}"
 
 
 def get_cart(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
@@ -425,14 +418,21 @@ def get_cart(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
 
 
 def cart_total(cart: dict) -> float:
+    """購物車合計（U）"""
     return round(sum(item_price(k) * q for k, q in cart.items()), 2)
+
+
+def cart_total_rm(cart: dict) -> float:
+    """購物車合計（RM）"""
+    return round(sum(item_price_rm(k) * q for k, q in cart.items()), 2)
 
 
 def cart_text(cart: dict) -> str:
     lines = [
-        f"• {display_name(k)} x{q}  {money(item_price(k) * q)}" for k, q in cart.items()
+        f"• {display_name(k)} x{q}  {money(item_price(k) * q, item_price_rm(k) * q)}"
+        for k, q in cart.items()
     ]
-    return "\n".join(lines) + f"\n\n💰 合計：{money(cart_total(cart), total=True)}"
+    return "\n".join(lines) + f"\n\n💰 合計：{money(cart_total(cart), cart_total_rm(cart))}"
 
 
 def render_cart(ctx):
@@ -463,14 +463,14 @@ def category_markup():
 
 def category_view(cat):
     rows = []
-    for iid, (n, p) in MENU[cat].items():
+    for iid, (n, rm, u) in MENU[cat].items():
         r = remaining(iid)
         if r is not None and r <= 0:
             rows.append([InlineKeyboardButton(f"❌ {n}（已售完）", callback_data="sold")])
             continue
         cb = f"pick:{iid}" if is_drink(iid) else f"add:{iid}"
         tail = f"（剩{r}）" if r is not None and r <= LOW_STOCK_HINT else ""
-        rows.append([InlineKeyboardButton(f"{n}  {money(p)}{tail}", callback_data=cb)])
+        rows.append([InlineKeyboardButton(f"{n}  {money(u, rm)}{tail}", callback_data=cb)])
     rows.append([
         InlineKeyboardButton("⬅️ 返回分類", callback_data="menu"),
         InlineKeyboardButton("🛒 購物車", callback_data="cart"),
@@ -480,12 +480,12 @@ def category_view(cat):
 
 # ----- 飲料選項：加珍珠 → 甜度 → 冰塊 -----
 def topping_view(iid):
-    name, price = ITEMS[iid]
-    with_topping = ITEMS[iid + "p"][1]
+    name, price, price_rm = ITEMS[iid]
+    _, with_u, with_rm = ITEMS[iid + "p"]
     rows = [
-        [InlineKeyboardButton(f"不加  {money(price)}", callback_data=f"sg:{iid}")],
+        [InlineKeyboardButton(f"不加  {money(price, price_rm)}", callback_data=f"sg:{iid}")],
         [InlineKeyboardButton(
-            f"🧋 {TOPPING_NAME} +{money(TOPPING_PRICE)}  → {money(with_topping)}",
+            f"🧋 {TOPPING_NAME} +{money(TOPPING_PRICE, TOPPING_PRICE_RM)}  → {money(with_u, with_rm)}",
             callback_data=f"sg:{iid}p",
         )],
         [InlineKeyboardButton("⬅️ 返回", callback_data=f"cat:{ITEM_CAT[iid]}")],
@@ -713,6 +713,7 @@ def order_lines(cart: dict) -> list:
             "ice": ICE[i] if i is not None else "",
             "qty": q,
             "price": ITEMS[iid][1],
+            "price_rm": ITEMS[iid][2],
         })
     return out
 
@@ -736,7 +737,7 @@ def save_order(no, d, cart):
 # ==================== 基本指令 ====================
 MERCHANT_HELP = (
     "🧑‍🍳 商家指令（只有商家群組能用）\n\n"
-    "🏪 營業\n開店 ／ 關店\n匯率 4.45（設定 1U 等於幾馬幣）\n結算（查舊場次：結算 2026-10-10）\n訂單（只傳訂單清單）\n營業日（查看目前場次）\n\n"
+    "🏪 營業\n開店 ／ 關店\n結算（查舊場次：結算 2026-10-10）\n訂單（只傳訂單清單）\n營業日（查看目前場次）\n\n"
     "📦 庫存\n庫存\n設定庫存（換行寫「雞排 50」）\n售完 雞排 ／ 補貨 雞排 ／ 清除庫存\n\n"
     "🛵 服務\n關閉外帶 ／ 開啟外帶\n關閉外送 ／ 開啟外送\n\n"
     "💳 付款\n客人結帳可選 TNG／USDT；客人傳付款截圖後，按訊息下方「✅ 確認收款」\n\n"
@@ -1034,12 +1035,11 @@ async def loc_hint(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return LOC
 
 
-def pay_amount_text(method: str, total_u: float) -> str:
-    """這個付款方式要付多少：USDT 付 U 的金額；TNG 付馬幣（需要先設定匯率）"""
+def pay_amount_text(method: str, total_u: float, total_rm: float) -> str:
+    """這個付款方式要付多少：USDT 付 U 的金額；TNG 付 RM 的金額（都是菜單上的固定價格加總）"""
     if method == "usdt":
         return f"{total_u:.2f} USDT"
-    rm = rm_amount(total_u, SETTINGS.get("rm_rate"), total=True)
-    return f"RM{rm:.2f}" if rm is not None else f"{total_u:.2f}{CURRENCY}（馬幣金額請向客服確認）"
+    return f"RM{total_rm:.2f}"
 
 
 async def after_contact(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1050,12 +1050,12 @@ async def after_contact(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def ask_pay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    total = cart_total(get_cart(ctx))
+    cart = get_cart(ctx)
     kb = ReplyKeyboardMarkup(
         [[PAY_LABEL[k] for k in PAY_METHODS], [BTN_BACK_MENU, BTN_CANCEL]], resize_keyboard=True
     )
     await update.message.reply_text(
-        f"請選擇付款方式：\n\n💰 訂單金額：{money(total, total=True)}", reply_markup=kb
+        f"請選擇付款方式：\n\n💰 訂單金額：{money(cart_total(cart), cart_total_rm(cart))}", reply_markup=kb
     )
     return PAY
 
@@ -1076,7 +1076,7 @@ async def ask_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d = ctx.user_data
     pay = d.get("pay") if PAY_METHODS else None
     pay_line = (
-        f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, cart_total(get_cart(ctx)))}）" if pay else ""
+        f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, cart_total(get_cart(ctx)), cart_total_rm(get_cart(ctx)))}）" if pay else ""
     )
     loc_line = ""
     if d.get("order_type") == BTN_DELIVERY and ASK_DELIVERY_LOCATION:
@@ -1140,7 +1140,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lng = loc.get("lng") if loc else None
     map_link = loc.get("link") if loc else None
     total_u = cart_total(cart)
-    rm_total = rm_amount(total_u, SETTINGS.get("rm_rate"), total=True)
+    rm_total = cart_total_rm(cart)
 
     # 取號並寫入紀錄（加鎖：避免兩位客人同時下單拿到同一個編號，也避免同時搶最後一份庫存）
     problems = []
@@ -1161,8 +1161,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "phone": d["phone"],
                 "type": t,
                 "addr": d["addr"],
-                "total": cart_total(cart),
-                "rate": SETTINGS.get("rm_rate"),
+                "total": total_u,
                 "rm_total": rm_total,
                 "pay": pay,
                 "lat": lat,
@@ -1174,7 +1173,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(stock_warning(problems), reply_markup=MAIN_KB)
         return ConversationHandler.END
 
-    pay_line = f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, total_u)}）" if pay else ""
+    pay_line = f"\n付款：{PAY_LABEL[pay]}（應付 {pay_amount_text(pay, total_u, rm_total)}）" if pay else ""
     has_loc = lat is not None or bool(map_link)
     loc_line = ("\n定位：已提供 📍" if has_loc else "\n定位：未提供") if (t == "d" and ASK_DELIVERY_LOCATION) else ""
     summary = (
@@ -1250,15 +1249,12 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-def payment_html(no: str, method: str, total_u: float, rm_total) -> str:
+def payment_html(no: str, method: str, total_u: float, rm_total: float) -> str:
     """下單後顯示給客人的付款說明（HTML；收款號碼與地址用 <code>，客人點一下就能複製）"""
     e = html.escape
     if method == "tng":
         lines = ["💙 <b>TNG 電子錢包付款</b>"]
-        if rm_total is not None:
-            lines.append(f"訂單 #{no}　應付：<b>RM{rm_total:.2f}</b>")
-        else:
-            lines.append(f"訂單 #{no}　金額：<b>{total_u:.2f}{CURRENCY}</b>（馬幣金額請聯繫客服確認）")
+        lines.append(f"訂單 #{no}　應付：<b>RM{rm_total:.2f}</b>")
         if TNG_NUMBER:
             who = f"（{e(TNG_NAME)}）" if TNG_NAME else ""
             lines.append(f"收款號碼：<code>{e(TNG_NUMBER)}</code>{who}")
@@ -1281,7 +1277,7 @@ def payment_html(no: str, method: str, total_u: float, rm_total) -> str:
     return "\n".join(lines)
 
 
-async def send_payment_info(update: Update, no: str, method: str, total_u: float, rm_total):
+async def send_payment_info(update: Update, no: str, method: str, total_u: float, rm_total: float):
     text = payment_html(no, method, total_u, rm_total)
     qr = os.path.join(BASE_DIR, TNG_QR) if (method == "tng" and TNG_QR) else ""
     if qr and os.path.exists(qr):
@@ -1691,15 +1687,16 @@ STATUS_TEXT = {
 
 
 def order_rate(o: dict):
-    """這張單當時的匯率；舊訂單沒有紀錄就用現在的匯率"""
-    return o.get("rate") or SETTINGS.get("rm_rate")
+    """只給取消匯率之前的舊訂單用：那張單當時的匯率（沒有就是 None）"""
+    return o.get("rate")
 
 
 def order_rm(o: dict):
-    """這張單的馬幣總額（含 5 仙進位）；沒有匯率回傳 None"""
+    """這張單的馬幣總額；舊訂單當時沒設匯率就回傳 None"""
     if o.get("rm_total") is not None:
         return o["rm_total"]
-    return rm_amount(o["total"], SETTINGS.get("rm_rate"), total=True)
+    rate = order_rate(o)
+    return round(o["total"] * rate, 2) if rate else None
 
 
 def aggregate(day: str) -> dict:
@@ -1714,7 +1711,9 @@ def aggregate(day: str) -> dict:
             )
             it["qty"] += l["qty"]
             it["amount"] += l["price"] * l["qty"]
-            if rate:
+            if l.get("price_rm") is not None:
+                it["amount_rm"] += l["price_rm"] * l["qty"]
+            elif rate:  # 舊訂單（沒有記錄 RM 單價）：用當時的匯率
                 it["amount_rm"] += l["price"] * l["qty"] * rate
             if l["topping"]:
                 it["topping"] += l["qty"]
@@ -2118,9 +2117,6 @@ async def day_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🏪 目前狀態：{'🟢 營業中' if SETTINGS['open'] else '🔴 已打烊'}"
         f"（外帶 {'✅' if SETTINGS['pickup'] else '❌'}｜外送 {'✅' if SETTINGS['delivery'] else '❌'}）",
     ]
-    lines.append(
-        f"💱 匯率：1{CURRENCY} = RM{SETTINGS['rm_rate']:g}" if SETTINGS.get("rm_rate") else "💱 匯率：尚未設定（只顯示 U）"
-    )
     if SETTINGS["session"]:
         extra = f"，關店 {fmt_iso(SETTINGS['closed_at'])}" if not SETTINGS["open"] else ""
         lines.append(f"📅 目前場次：{day}（開店 {fmt_iso(SETTINGS['opened_at'])}{extra}）")
@@ -2217,7 +2213,7 @@ async def shop_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ==================== 商家：每日庫存 ====================
 def base_items() -> dict:
-    return {iid: name for group in MENU.values() for iid, (name, _) in group.items()}
+    return {iid: name for group in MENU.values() for iid, (name, *_) in group.items()}
 
 
 def resolve_item(query: str):
@@ -2472,44 +2468,6 @@ async def import_backup(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ==================== 商家：匯率（U → 馬幣）====================
-async def set_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """「匯率」查看；「匯率 4.45」設定 1U = RM4.45；「匯率 關閉」不顯示馬幣"""
-    msg = update.effective_message
-    m = re.match(r"^\s*(?:匯率|/rate(?:@\w+)?)\s*(.*)$", msg.text or "", re.S)
-    arg = (m.group(1).strip() if m else "")
-    cur = SETTINGS.get("rm_rate")
-    if not arg:
-        if cur:
-            await msg.reply_text(f"💱 目前匯率：1{CURRENCY} = RM{cur:g}\n要修改請輸入：匯率 4.45　要關閉馬幣顯示：匯率 關閉")
-        else:
-            await msg.reply_text(
-                f"💱 還沒設定匯率，客人目前只看到 {CURRENCY}。\n"
-                f"設定方式：匯率 4.45（代表 1{CURRENCY} = RM4.45）"
-            )
-        return
-    if arg in ("關閉", "關", "off", "0"):
-        SETTINGS["rm_rate"] = None
-        save_settings()
-        await msg.reply_text(f"✅ 已關閉馬幣顯示，客人只會看到 {CURRENCY}。")
-        return
-    try:
-        rate = float(arg.replace(",", "."))
-    except ValueError:
-        await msg.reply_text("格式不對，請寫成：匯率 4.45")
-        return
-    if not 0.1 <= rate <= 100:
-        await msg.reply_text("這個數字看起來不太對（1U 應該是幾馬幣），請再確認，例如：匯率 4.45")
-        return
-    SETTINGS["rm_rate"] = rate
-    save_settings()
-    sample = list(base_items().items())[:2]
-    lines = [f"✅ 已設定匯率：1{CURRENCY} = RM{rate:g}", ""]
-    lines += [f"• {name}　{money(ITEMS[iid][1])}" for iid, name in sample]
-    lines.append("\n客人現在看到的價格會同時顯示馬幣；之前的訂單仍依當時的匯率計算。")
-    await msg.reply_text("\n".join(lines))
-
-
 # ==================== 商家：開關外帶 / 外送 ====================
 async def apply_toggle(update: Update, kind: str, enable: bool):
     SETTINGS["pickup" if kind == "外帶" else "delivery"] = enable
@@ -2720,8 +2678,6 @@ def main():
     app.add_handler(MessageHandler(
         filters.Document.ALL & filters.CaptionRegex(r"^\s*匯入") & admin_filter, import_backup
     ))
-    app.add_handler(CommandHandler("rate", set_rate, filters=admin_filter))
-    app.add_handler(MessageHandler(filters.Regex(r"^\s*匯率(\s[\s\S]*)?$") & admin_filter, set_rate))
     app.add_handler(CommandHandler("hidemenu", hide_menu, filters=admin_filter))
     app.add_handler(MessageHandler(
         filters.Regex(r"^\s*(隱藏選單|關閉選單|收起選單)\s*$") & admin_filter, hide_menu
@@ -2754,11 +2710,11 @@ def main():
     # 商家指令在非商家群組被輸入時，說明原因與 chat id
     app.add_handler(CommandHandler(
         ["ping", "day", "settle", "orders", "open", "close", "pickup", "delivery", "testad",
-         "stock", "setstock", "soldout", "restock", "hidemenu", "sticker", "stickertest", "rate", "backup"],
+         "stock", "setstock", "soldout", "restock", "hidemenu", "sticker", "stickertest", "backup"],
         not_admin, filters=~admin_filter,
     ))
     app.add_handler(MessageHandler(
-        filters.Regex(r"(?s)^\s*(結算|訂單|營業日|開店|關店|庫存|設定庫存|已?售完|補貨|清除庫存|隱藏選單|關閉選單|收起選單|補印|貼紙測試|匯率|備份|(開啟|關閉)(外帶|外送))(\s.*)?$")
+        filters.Regex(r"(?s)^\s*(結算|訂單|營業日|開店|關店|庫存|設定庫存|已?售完|補貨|清除庫存|隱藏選單|關閉選單|收起選單|補印|貼紙測試|備份|(開啟|關閉)(外帶|外送))(\s.*)?$")
         & filters.ChatType.GROUPS & ~admin_filter,
         not_admin,
     ))
