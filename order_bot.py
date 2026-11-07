@@ -55,7 +55,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 VERSION = "2026-11-01 v21（固定 RM / U 雙價格，取消匯率）"
 
 # ==================== 設定區（請修改）====================
-TOKEN = os.getenv("BOT_TOKEN", "在這裡貼上BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN", "8995129755:AAH-OvcRbpPoEyjmZTNm_zjEupolJg-qXyc")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-1004424236242"))  # 接收訂單的商家個人或群組 id
 
 # 以下幾項也可以用同名的環境變數設定（雲端平台不用改程式）
@@ -64,7 +64,7 @@ SHOP_HOURS = os.getenv("SHOP_HOURS", "18:00 - 03:00")  # 營業時間（顯示�
 
 # 客服的 Telegram 使用者名稱（ID），只能英文數字底線，寫不寫 @ 都可以。
 # 客人看到的聯絡方式會是「聯繫客服：@ID」，並附上一鍵聯繫的按鈕；留空 "" 就只顯示營業時間。
-CS_USERNAME = os.getenv("CS_USERNAME", "").strip().lstrip("@")
+CS_USERNAME = os.getenv("chicken5757", "").strip().lstrip("@")
 
 # 客人看到的聯絡資訊。想完全自訂，可以設環境變數 SHOP_CONTACT（換行寫成 \n）
 SHOP_CONTACT = os.getenv(
@@ -73,11 +73,11 @@ SHOP_CONTACT = os.getenv(
 ).replace("\\n", "\n")
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
-BOT_USERNAME = os.getenv("BOT_USERNAME", "你的機器人使用者名稱")  # 不含 @
+CHANNEL_ID = os.getenv("@JIPAIWANG_KL", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
+BOT_USERNAME = os.getenv("BOT_USERNAME", "jiapiwang_bot")  # 不含 @
 # 客服發文群組：客服在這個群組傳「圖片＋文案」，機器人會轉發到上面的頻道，並附上「立即點餐」按鈕。
 # 填這個群組的 chat id（在群組輸入 /chatid 查看）；留空 "" = 不啟用。
-CS_GROUP_ID = int(os.getenv("CS_GROUP_ID") or 0)
+CS_GROUP_ID = int(os.getenv("-5304864351") or 0)
 CS_POST_PREFIX = "發布"  # 純文字貼文要用這個開頭，例如「發布 今天雞排買一送一」；圖片不用打這個
 TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 # 「營業日」從幾點開始算新的一天（要落在收攤之後、開店之前）。
