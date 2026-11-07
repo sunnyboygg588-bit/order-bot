@@ -55,7 +55,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 VERSION = "2026-11-01 v21（固定 RM / U 雙價格，取消匯率）"
 
 # ==================== 設定區（請修改）====================
-TOKEN = os.getenv("BOT_TOKEN", "8995129755:AAH-OvcRbpPoEyjmZTNm_zjEupolJg-qXyc")
+TOKEN = os.getenv("BOT_TOKEN", "在這裡貼上BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "-1004424236242"))  # 接收訂單的商家個人或群組 id
 
 # 以下幾項也可以用同名的環境變數設定（雲端平台不用改程式）
@@ -64,7 +64,7 @@ SHOP_HOURS = os.getenv("SHOP_HOURS", "18:00 - 03:00")  # 營業時間（顯示�
 
 # 客服的 Telegram 使用者名稱（ID），只能英文數字底線，寫不寫 @ 都可以。
 # 客人看到的聯絡方式會是「聯繫客服：@ID」，並附上一鍵聯繫的按鈕；留空 "" 就只顯示營業時間。
-CS_USERNAME = os.getenv("chicken5757", "").strip().lstrip("@")
+CS_USERNAME = os.getenv("CS_USERNAME", "").strip().lstrip("@")
 
 # 客人看到的聯絡資訊。想完全自訂，可以設環境變數 SHOP_CONTACT（換行寫成 \n）
 SHOP_CONTACT = os.getenv(
@@ -73,11 +73,11 @@ SHOP_CONTACT = os.getenv(
 ).replace("\\n", "\n")
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
-CHANNEL_ID = os.getenv("CHANNEL_ID", "1004424236242")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
-BOT_USERNAME = os.getenv("BOT_USERNAME", "jipaiwang_bot")  # 不含 @
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
+BOT_USERNAME = os.getenv("BOT_USERNAME", "你的機器人使用者名稱")  # 不含 @
 # 客服發文群組：客服在這個群組傳「圖片＋文案」，機器人會轉發到上面的頻道，並附上「立即點餐」按鈕。
 # 填這個群組的 chat id（在群組輸入 /chatid 查看）；留空 "" = 不啟用。
-CS_GROUP_ID = int(os.getenv("-5304864351") or 0)
+CS_GROUP_ID = int(os.getenv("CS_GROUP_ID") or 0)
 CS_POST_PREFIX = "發布"  # 純文字貼文要用這個開頭，例如「發布 今天雞排買一送一」；圖片不用打這個
 TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 # 「營業日」從幾點開始算新的一天（要落在收攤之後、開店之前）。
@@ -2172,6 +2172,18 @@ async def cs_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     bot = ctx.bot
     me = await bot.get_me()
     ok, bad = "✅", "❌"
+    chat = update.effective_chat
+    if chat.id not in (CS_GROUP_ID, ADMIN_CHAT_ID):
+        # 這個群組不是已登記的客服群組／商家群組：只說明原因，不洩漏其他資訊
+        if not CS_GROUP_ID:
+            why = "❌ 程式還沒設定 CS_GROUP_ID，所以客服發文功能沒有啟用。"
+        else:
+            why = f"❌ 這個群組不是客服發文群組（CS_GROUP_ID 是 {CS_GROUP_ID}）。"
+        await msg.reply_text(
+            f"{why}\n\n這個群組的 chat id：{chat.id}\n"
+            "請把 CS_GROUP_ID 設成這個數字（連負號一起），存檔後重新啟動機器人。"
+        )
+        return
     lines = ["🧪 客服發文功能檢查\n"]
 
     # 1. BOT_USERNAME（按鈕連結用）
@@ -2203,7 +2215,6 @@ async def cs_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{bad} 找不到官方頻道或機器人不在裡面（CHANNEL_ID={CHANNEL_ID}）：{e}")
 
     # 3. 這個群組：機器人收得到圖片嗎？（管理員，或關閉隱私模式）
-    chat = update.effective_chat
     try:
         m = await bot.get_chat_member(chat.id, me.id)
         is_admin = m.status in ("administrator", "creator")
@@ -2774,6 +2785,7 @@ def main():
     global ADMIN_FILTER
     print("機器人啟動｜版本：", VERSION)
     print(run_info())
+    print(f"📣 客服發文群組：{'已啟用，CS_GROUP_ID = ' + str(CS_GROUP_ID) if CS_GROUP_ID else '未啟用（還沒設定 CS_GROUP_ID）'}")
     if CS_GROUP_ID and not CHANNEL_ID:
         print("⚠️ 已設定 CS_GROUP_ID 但尚未設定 CHANNEL_ID：客服發文會失敗")
     if CS_GROUP_ID and BOT_USERNAME == "你的機器人使用者名稱":
@@ -2841,10 +2853,11 @@ def main():
             & (filters.PHOTO | filters.Regex(rf"^\s*{re.escape(CS_POST_PREFIX)}(\s|$)")),
             cs_post,
         ))
-        # 測試：客服群組或商家群組都能用
-        test_chats = filters.Chat(chat_id=[c for c in (CS_GROUP_ID, ADMIN_CHAT_ID) if c])
-        app.add_handler(CommandHandler("testpost", cs_test, filters=test_chats))
-        app.add_handler(MessageHandler(filters.Regex(r"^\s*測試發文\s*$") & test_chats, cs_test))    # 結算：只有商家對話可以使用
+    # 測試發文：任何群組都會回應（沒設 CS_GROUP_ID 或設錯時，會直接告訴你原因）
+    app.add_handler(CommandHandler("testpost", cs_test, filters=filters.ChatType.GROUPS))
+    app.add_handler(MessageHandler(
+        filters.Regex(r"^\s*測試發文\s*$") & filters.ChatType.GROUPS & filters.UpdateType.MESSAGE, cs_test
+    ))    # 結算：只有商家對話可以使用
     app.add_handler(CommandHandler("settle", settle_cmd, filters=admin_filter))
     app.add_handler(MessageHandler(
         filters.Regex(r"^\s*結算(?:\s+(\d{4}-\d{2}-\d{2}(?:-\d+)?))?\s*$") & admin_filter, settle_text
