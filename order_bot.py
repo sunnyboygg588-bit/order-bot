@@ -64,7 +64,7 @@ SHOP_HOURS = os.getenv("SHOP_HOURS", "18:00 - 03:00")  # 營業時間（顯示�
 
 # 客服的 Telegram 使用者名稱（ID），只能英文數字底線，寫不寫 @ 都可以。
 # 客人看到的聯絡方式會是「聯繫客服：@ID」，並附上一鍵聯繫的按鈕；留空 "" 就只顯示營業時間。
-CS_USERNAME = os.getenv("chicken5757", "").strip().lstrip("@")
+CS_USERNAME = os.getenv("CS_USERNAME", "").strip().lstrip("@")
 
 # 客人看到的聯絡資訊。想完全自訂，可以設環境變數 SHOP_CONTACT（換行寫成 \n）
 SHOP_CONTACT = os.getenv(
@@ -75,6 +75,10 @@ SHOP_CONTACT = os.getenv(
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
 BOT_USERNAME = os.getenv("BOT_USERNAME", "你的機器人使用者名稱")  # 不含 @
+# 客服發文群組：客服在這個群組傳「圖片＋文案」，機器人會轉發到上面的頻道，並附上「立即點餐」按鈕。
+# 填這個群組的 chat id（在群組輸入 /chatid 查看）；留空 "" = 不啟用。
+CS_GROUP_ID = int(os.getenv("CS_GROUP_ID") or 0)
+CS_POST_PREFIX = "發布"  # 純文字貼文要用這個開頭，例如「發布 今天雞排買一送一」；圖片不用打這個
 TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 # 「營業日」從幾點開始算新的一天（要落在收攤之後、開店之前）。
 # 營業時間 18:00~03:00 → 設 17：晚上 18:00 到隔天 03:00 的訂單都算同一天，
@@ -764,6 +768,7 @@ MERCHANT_HELP = (
     "💳 付款\n客人結帳可選 TNG／USDT；客人傳付款截圖後，按訊息下方「✅ 確認收款」\n\n"
     "💾 資料\n備份（傳資料備份檔，關店也會自動傳）\n匯入：傳備份檔並在說明寫「匯入」\n\n"
     "🏷 杯貼\n接單時自動傳杯貼\n補印 12（重傳 #0012）\n貼紙測試（傳範例貼紙）\n\n"
+    "📣 頻道發文\n客服群組傳圖片＋文案，機器人發到頻道\n測試發文（檢查設定並傳預覽，不會發到頻道）\n\n"
     "🔧 其他\n/ping 速度與執行電腦\n/chatid 查看群組 id\n隱藏選單：收起點餐按鈕"
 )
 
@@ -2102,6 +2107,139 @@ async def post_ad(ctx: ContextTypes.DEFAULT_TYPE):
     await send_ad(ctx.bot, ctx.job.data)
 
 
+def order_button_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🍽 立即點餐", url=f"https://t.me/{BOT_USERNAME}")]]
+    )
+
+
+async def cs_post(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """客服發文群組：傳「圖片＋文案」→ 機器人發到官方頻道，下方附「立即點餐」按鈕。
+    純文字貼文請用「發布 內容」開頭；其他一般聊天不會被轉發。"""
+    msg = update.effective_message
+    if not CHANNEL_ID:
+        await msg.reply_text("⚠️ 尚未設定 CHANNEL_ID（官方頻道），無法發文。")
+        return
+
+    # 一次傳多張圖（相簿）：不支援，只提醒一次
+    if msg.media_group_id:
+        seen = ctx.bot_data.setdefault("cs_album_warned", set())
+        if msg.media_group_id not in seen:
+            seen.add(msg.media_group_id)
+            await msg.reply_text("⚠️ 一次只能發一張圖片＋文案，請分開傳送。這組圖片沒有發出。")
+        return
+
+    kb = order_button_markup()
+    try:
+        if msg.photo:
+            if len(msg.caption or "") > 1024:
+                await msg.reply_text(
+                    f"⚠️ 文案太長（{len(msg.caption)} 字），圖片文案上限 1024 字，請縮短後重傳。沒有發出。"
+                )
+                return
+            # copy_message 會保留圖片、文案與文字格式（粗體、連結等）
+            sent = await send_retry(
+                ctx.bot.copy_message, CHANNEL_ID, msg.chat_id, msg.message_id, reply_markup=kb
+            )
+        else:
+            text = (msg.text or "").strip()[len(CS_POST_PREFIX):].strip()
+            if not text:
+                await msg.reply_text(f"請在「{CS_POST_PREFIX}」後面寫文案，例如：{CS_POST_PREFIX} 今天雞排買一送一")
+                return
+            if len(text) > 4096:
+                await msg.reply_text("⚠️ 文案太長（上限 4096 字），沒有發出。")
+                return
+            sent = await send_retry(ctx.bot.send_message, CHANNEL_ID, text, reply_markup=kb)
+    except Exception as e:
+        logging.exception("客服發文到頻道失敗")
+        await msg.reply_text(
+            f"❌ 發到頻道失敗：{e}\n請確認機器人已加入頻道並設為管理員（有「發布訊息」權限），且 CHANNEL_ID 正確。"
+        )
+        return
+
+    # 發文成功，附上頻道貼文連結（公開頻道才有連結）
+    # （測試功能請見下面的 cs_test）
+    link = ""
+    if isinstance(CHANNEL_ID, str) and CHANNEL_ID.startswith("@"):
+        link = f"\nhttps://t.me/{CHANNEL_ID[1:]}/{sent.message_id}"
+    await msg.reply_text(f"✅ 已發到官方頻道，下方有「立即點餐」按鈕。{link}")
+
+
+async def cs_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """「測試發文」或 /testpost：檢查客服發文功能的設定，並在『這個群組』傳一則預覽貼文
+    （長得跟頻道貼文一樣，附「立即點餐」按鈕）。預覽不會發到頻道。"""
+    msg = update.effective_message
+    bot = ctx.bot
+    me = await bot.get_me()
+    ok, bad = "✅", "❌"
+    lines = ["🧪 客服發文功能檢查\n"]
+
+    # 1. BOT_USERNAME（按鈕連結用）
+    if BOT_USERNAME == "你的機器人使用者名稱":
+        lines.append(f"{bad} BOT_USERNAME 還沒設定，按鈕會連錯。機器人真正的名稱是：{me.username}")
+    elif BOT_USERNAME.lower() != (me.username or "").lower():
+        lines.append(f"⚠️ BOT_USERNAME（{BOT_USERNAME}）跟機器人實際名稱（{me.username}）不一樣，按鈕可能連錯")
+    else:
+        lines.append(f"{ok} BOT_USERNAME：@{BOT_USERNAME}")
+
+    # 2. 官方頻道：找得到嗎？機器人是管理員、能發文嗎？
+    if not CHANNEL_ID:
+        lines.append(f"{bad} CHANNEL_ID 還沒設定")
+    else:
+        try:
+            chan = await bot.get_chat(CHANNEL_ID)
+            member = await bot.get_chat_member(CHANNEL_ID, me.id)
+            title = chan.title or str(CHANNEL_ID)
+            if member.status == "creator":
+                lines.append(f"{ok} 官方頻道：{title}（機器人是擁有者）")
+            elif member.status == "administrator":
+                if getattr(member, "can_post_messages", True):
+                    lines.append(f"{ok} 官方頻道：{title}（機器人是管理員，可發文）")
+                else:
+                    lines.append(f"{bad} 官方頻道：{title}｜機器人是管理員，但沒有「發布訊息」權限")
+            else:
+                lines.append(f"{bad} 官方頻道：{title}｜機器人不是管理員，請在頻道把它設為管理員")
+        except Exception as e:
+            lines.append(f"{bad} 找不到官方頻道或機器人不在裡面（CHANNEL_ID={CHANNEL_ID}）：{e}")
+
+    # 3. 這個群組：機器人收得到圖片嗎？（管理員，或關閉隱私模式）
+    chat = update.effective_chat
+    try:
+        m = await bot.get_chat_member(chat.id, me.id)
+        is_admin = m.status in ("administrator", "creator")
+    except Exception:
+        is_admin = False
+    if is_admin or me.can_read_all_group_messages:
+        lines.append(f"{ok} 這個群組：機器人收得到群組訊息")
+    else:
+        lines.append(f"{bad} 這個群組：機器人不是管理員且隱私模式開著，可能收不到圖片。請設為管理員，或到 @BotFather 用 /setprivacy 關閉")
+    if CS_GROUP_ID:
+        lines.append(f"{ok if chat.id == CS_GROUP_ID else 'ℹ️'} 目前這個群組 id：{chat.id}｜CS_GROUP_ID：{CS_GROUP_ID}"
+                     + ("" if chat.id == CS_GROUP_ID else "（你不是在客服群組執行測試）"))
+
+    await msg.reply_text("\n".join(lines))
+
+    # 4. 預覽貼文：在這個群組傳一則一樣的貼文（含「立即點餐」按鈕），不會發到頻道
+    sample = (
+        "🧪 【預覽】這是測試貼文，不會發到頻道。\n\n"
+        "實際發文時，頻道上看到的就是這個樣子：圖片＋文案，下方有「立即點餐」按鈕。"
+    )
+    kb = order_button_markup()
+    photo = next(
+        (p for p in (os.path.join(BASE_DIR, a.get("photo", "")) for a in ADS if a.get("photo")) if os.path.exists(p)),
+        None,
+    )
+    if photo:
+        with open(photo, "rb") as f:
+            await bot.send_photo(chat.id, photo=f, caption=sample, reply_markup=kb)
+    else:
+        await bot.send_message(chat.id, sample, reply_markup=kb)
+    await msg.reply_text(
+        "👆 這是預覽。想試真的發文：在客服群組傳一張圖片＋文案；"
+        "想確認頻道收得到：在商家群組輸入 /testad 1（會發第 1 篇廣告到頻道）。"
+    )
+
+
 async def testad(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/testad 發全部廣告；/testad 1 只發第 1 篇；/testad 2 只發第 2 篇"""
     if ADMIN_CHAT_ID and update.effective_chat.id != ADMIN_CHAT_ID:
@@ -2636,6 +2774,10 @@ def main():
     global ADMIN_FILTER
     print("機器人啟動｜版本：", VERSION)
     print(run_info())
+    if CS_GROUP_ID and not CHANNEL_ID:
+        print("⚠️ 已設定 CS_GROUP_ID 但尚未設定 CHANNEL_ID：客服發文會失敗")
+    if CS_GROUP_ID and BOT_USERNAME == "你的機器人使用者名稱":
+        print("⚠️ 尚未設定 BOT_USERNAME：頻道貼文的「立即點餐」按鈕會連到錯誤的地方")
     if "tng" in PAY_METHODS and not TNG_NUMBER:
         print("⚠️ 尚未設定 TNG_NUMBER：客人選 TNG 時，會被請去聯繫客服取得收款資訊")
     if "usdt" in PAY_METHODS and not USDT_ADDRESS:
@@ -2692,7 +2834,17 @@ def main():
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, on_migrate))
     app.add_handler(CommandHandler("testad", testad, filters=admin_filter))
-    # 結算：只有商家對話可以使用
+    # 客服發文群組：圖片＋文案 → 發到官方頻道（附「立即點餐」按鈕）
+    if CS_GROUP_ID:
+        app.add_handler(MessageHandler(
+            filters.Chat(chat_id=CS_GROUP_ID) & filters.UpdateType.MESSAGE
+            & (filters.PHOTO | filters.Regex(rf"^\s*{re.escape(CS_POST_PREFIX)}(\s|$)")),
+            cs_post,
+        ))
+        # 測試：客服群組或商家群組都能用
+        test_chats = filters.Chat(chat_id=[c for c in (CS_GROUP_ID, ADMIN_CHAT_ID) if c])
+        app.add_handler(CommandHandler("testpost", cs_test, filters=test_chats))
+        app.add_handler(MessageHandler(filters.Regex(r"^\s*測試發文\s*$") & test_chats, cs_test))    # 結算：只有商家對話可以使用
     app.add_handler(CommandHandler("settle", settle_cmd, filters=admin_filter))
     app.add_handler(MessageHandler(
         filters.Regex(r"^\s*結算(?:\s+(\d{4}-\d{2}-\d{2}(?:-\d+)?))?\s*$") & admin_filter, settle_text
