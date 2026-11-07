@@ -73,11 +73,11 @@ SHOP_CONTACT = os.getenv(
 ).replace("\\n", "\n")
 
 # ---------- 頻道廣告（CHANNEL_ID 留空 "" 就不啟用）----------
-CHANNEL_ID = os.getenv("CHANNEL_ID", "-5304864351")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
+CHANNEL_ID = os.getenv("CHANNEL_ID", "1004424236242")  # 例如 "@my_channel" 或 "-100xxxxxxxxxx"
 BOT_USERNAME = os.getenv("BOT_USERNAME", "jipaiwang_bot")  # 不含 @
 # 客服發文群組：客服在這個群組傳「圖片＋文案」，機器人會轉發到上面的頻道，並附上「立即點餐」按鈕。
 # 填這個群組的 chat id（在群組輸入 /chatid 查看）；留空 "" = 不啟用。
-CS_GROUP_ID = int(os.getenv("CS_GROUP_ID") or 0)
+CS_GROUP_ID = int(os.getenv("-5304864351") or 0)
 CS_POST_PREFIX = "發布"  # 純文字貼文要用這個開頭，例如「發布 今天雞排買一送一」；圖片不用打這個
 TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 # 「營業日」從幾點開始算新的一天（要落在收攤之後、開店之前）。
